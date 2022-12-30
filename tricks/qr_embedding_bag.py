@@ -20,7 +20,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import numpy as np
-
+import sys
+sys.path.insert(0, '..')
+from my_profiler import MyProfiler
 
 class QREmbeddingBag(nn.Module):
     r"""Computes sums or means over two 'bags' of embeddings, one using the quotient
@@ -109,10 +111,14 @@ class QREmbeddingBag(nn.Module):
                      'operation', 'max_norm', 'norm_type', 'scale_grad_by_freq',
                      'mode', 'sparse']
 
+    # yskim space
+    def get_qr_size(self):
+        return self.num_embeddings[0], self.num_embeddings[1]
+
     def __init__(self, num_categories, embedding_dim, num_collisions,
                  operation='mult', max_norm=None, norm_type=2.,
                  scale_grad_by_freq=False, mode='mean', sparse=False,
-                 _weight=None):
+                 _weight=None, expand=2):
         super(QREmbeddingBag, self).__init__()
 
         assert operation in ['concat', 'mult', 'add'], 'Not valid operation!'
@@ -135,6 +141,12 @@ class QREmbeddingBag(nn.Module):
         self.num_embeddings = [int(np.ceil(num_categories / num_collisions)),
             num_collisions]
 
+        # yskim space
+        self.expand = expand
+        if self.expand > 1 :
+            self.num_embeddings = [int(np.ceil(num_categories / num_collisions)),
+                num_collisions*self.expand]
+
         if _weight is None:
             self.weight_q = Parameter(torch.Tensor(self.num_embeddings[0], self.embedding_dim[0]))
             self.weight_r = Parameter(torch.Tensor(self.num_embeddings[1], self.embedding_dim[1]))
@@ -153,9 +165,15 @@ class QREmbeddingBag(nn.Module):
         nn.init.uniform_(self.weight_q, np.sqrt(1 / self.num_categories))
         nn.init.uniform_(self.weight_r, np.sqrt(1 / self.num_categories))
 
-    def forward(self, input, offsets=None, per_sample_weights=None):
+    def forward(self, k, input, offsets=None, per_sample_weights=None):
         input_q = (input / self.num_collisions).long()
         input_r = torch.remainder(input, self.num_collisions).long()
+
+        #yskim space
+        MyProfiler.record_qr_profile(k, input_q, input_r)
+        if self.expand > 1:
+            input_r_hash = torch.remainder(input_q, self.expand).long()
+            input_r = self.num_collisions * input_r_hash + input_r
 
         embed_q = F.embedding_bag(input_q, self.weight_q, offsets, self.max_norm,
                                   self.norm_type, self.scale_grad_by_freq, self.mode,
