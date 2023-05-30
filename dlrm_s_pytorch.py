@@ -458,6 +458,7 @@ class DLRM_Net(nn.Module):
                 ly.append(QV)
             else:
                 E = emb_l[k]
+                # sparse_index_group_batch : each table / sparse_offset_group_batch : table index
                 if args.qr_flag:
                     # yskim space
                     V = E(
@@ -499,7 +500,6 @@ class DLRM_Net(nn.Module):
         self.quantize_bits = bits
 
     def interact_features(self, x, ly):
-
         if self.arch_interaction_op == "dot":
             # concatenate dense and sparse features
             (batch_size, d) = x.shape
@@ -915,7 +915,7 @@ def inference(
             ),
             flush=True,
         )
-    return model_metrics_dict, is_best
+    return model_metrics_dict, is_best, acc_test
 
 
 def run():
@@ -1344,13 +1344,15 @@ def run():
             dlrm.top_l = ext_dist.DDP(dlrm.top_l)
 
     if not args.inference_only:
-        if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
+        if use_gpu and args.optimizer in ["rwsadagrad"]:
+        # if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
             sys.exit("GPU version of Adagrad is not supported by PyTorch.")
         # specify the optimizer algorithm
         opts = {
             "sgd": torch.optim.SGD,
             "rwsadagrad": RowWiseSparseAdagrad.RWSAdagrad,
             "adagrad": torch.optim.Adagrad,
+            "Adam" : torch.optim.SparseAdam
         }
 
         parameters = (
@@ -1374,7 +1376,11 @@ def run():
                 },
             ]
         )
-        optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
+        if args.optimizer == 'Adam':
+            optimizer = torch.optim.Adam(parameters, lr=args.learning_rate, amsgrad=True)
+        else:
+            optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
+
         lr_scheduler = LRPolicyScheduler(
             optimizer,
             args.lr_num_warmup_steps,
@@ -1695,7 +1701,7 @@ def run():
                         print(
                             "Testing at - {}/{} of epoch {},".format(j + 1, nbatches, k)
                         )
-                        model_metrics_dict, is_best = inference(
+                        model_metrics_dict, is_best, accuracy = inference(
                             args,
                             dlrm,
                             best_acc_test,
@@ -1705,6 +1711,9 @@ def run():
                             use_gpu,
                             log_iter,
                         )
+
+                        if is_best:
+                            best_acc_test = accuracy
 
                         if (
                             is_best
@@ -1799,6 +1808,7 @@ def run():
             )
 
     myprofiler.write_profile_result(args.qr_collisions)
+    myprofiler.write_trace_file(args.qr_collisions)
 
     # profiling
     if args.enable_profiling:

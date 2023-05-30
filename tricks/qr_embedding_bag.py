@@ -185,10 +185,9 @@ class QREmbeddingBag(nn.Module):
         if self.operation == 'concat':
             embed = torch.cat((embed_q, embed_r), dim=1)
         elif self.operation == 'add':
-            embed = embed_q + embed_r
+            embed = (embed_q + embed_r) / 2
         elif self.operation == 'mult':
             embed = embed_q * embed_r
-
         return embed
 
     def extra_repr(self):
