@@ -5,7 +5,7 @@ import pickle
 import os
 import dlrm_data_pytorch as dp
 import sys
-from address_mapping import AddressMapping
+from address_mapping import BasicAddressMapping, BGAddressMapping
 
 class MyProfiler:
 
@@ -157,11 +157,13 @@ def load_profile_result(called_inside_dlrm, savefile):
 
     return profiles
 
-def get_physical_address(addr_mapper, using_bg_map, index, emb_value, collisions=None):
-    if using_bg_map:
-        in_HBM, emb_physical_addr = addr_mapper.bankgroup_based_physical_address_mapping(index, emb_value)
-    else:
-        in_HBM, emb_physical_addr = addr_mapper.basic_physical_address_mapping(index, emb_value, collisions)
+def get_physical_address(addr_mapper, using_bg_map, table_index, vec_index, is_r_vec=False):
+    in_HBM, emb_physical_addr = addr_mapper.physical_address_mapping(table_index, vec_index, is_r_vec)
+
+    # if using_bg_map:
+    #     in_HBM, emb_physical_addr = addr_mapper.bankgroup_based_physical_address_mapping(table_index, vec_idx)
+    # else:
+    #     in_HBM, emb_physical_addr = addr_mapper.basic_physical_address_mapping(table_idx, vec_idx, is_r_vec, collisions)
 
     return in_HBM, emb_physical_addr
 
@@ -171,18 +173,21 @@ def write_trace_file(
         readfile='./input/train.txt',
         savefile='./profile.pickle', 
         train_data=None, 
-        qr_flag=False, 
         using_bg_map=False
     ):
 
     profiles = load_profile_result(called_inside_dlrm, savefile)
-    addr_mapper = AddressMapping(profiles, using_bg_map=using_bg_map)
+    if not using_bg_map:
+        addr_mapper = BasicAddressMapping(profiles, collisions=collisions)
+    else:
+        addr_mapper = BGAddressMapping(profiles, collisions=collisions)
+
     total_data = len(train_data)
 
     if using_bg_map:
-        writefile = './bg_map_trace_col_%d.txt' % collisions
+        writefile = './traces/bg_map_trace_col_%d.txt' % collisions
     else:
-        writefile = './random_trace_col_%d.txt' % collisions
+        writefile = './traces/random_trace_col_%d.txt' % collisions
 
     print("writing trace file...")
     with open(writefile, 'w') as wf:
@@ -195,41 +200,63 @@ def write_trace_file(
                 break
 
             dense, feat, y = data
-            for i, emb in enumerate(feat):
+            for j, emb in enumerate(feat):
                 q_emb = emb // collisions
 
                 # write q vector
-                in_HBM, emb_physical_addr = get_physical_address(addr_mapper, using_bg_map, i, q_emb)
+                in_HBM, emb_physical_addr = get_physical_address(
+                                                addr_mapper=addr_mapper, 
+                                                using_bg_map=using_bg_map, 
+                                                table_index=j, 
+                                                vec_index=q_emb,
+                                                is_r_vec=False
+                                            )
                 device = "HBM" if in_HBM else "DIMM"
                 wf.write(f"{device} {emb_physical_addr}\n")
 
                 # write r vector                
-                if qr_flag and not using_bg_map:
-                    r_emb = emb % collisions
-                    in_HBM, emb_physical_addr = get_physical_address(addr_mapper, using_bg_map, i, r_emb, collisions)
-
-                    device = "HBM" if in_HBM else "DIMM"
-                    wf.write(f"{device} {emb_physical_addr}\n")
+                if not using_bg_map:
+                    if collisions > 0:
+                        r_emb = emb % collisions
+                        in_HBM, emb_physical_addr = get_physical_address(
+                                                        addr_mapper=addr_mapper, 
+                                                        using_bg_map=using_bg_map, 
+                                                        table_index=j, 
+                                                        vec_index=r_emb,
+                                                        is_r_vec=True
+                                                    )
+                        device = "HBM" if in_HBM else "DIMM"
+                        wf.write(f"{device} {emb_physical_addr}\n")
             wf.write('\n')
 
 
 if __name__ == "__main__":
     profiles = None
-    savefile = './profile.pickle'
-    collision = 4
+    profile_savefile = './savedata/profile.pickle'
+    train_data_savefile = './savedata/train_data.pickle'
+    collisions = 4
     print('loading train data...')
 
-    train_data = dp.CriteoDataset(
-        "kaggle",
-        -1,
-        0.0,
-        "total",
-        "train",
-        "./input/train.txt",
-        "./input/kaggleAdDisplayChallenge_processed.npz",
-        False,
-        False
-    )
+
+    if not os.path.exists(train_data_savefile):
+        train_data = dp.CriteoDataset(
+            "kaggle",
+            -1,
+            0.0,
+            "total",
+            "train",
+            "./input/train.txt",
+            "./input/kaggleAdDisplayChallenge_processed.npz",
+            False,
+            False
+        )
+        with open(train_data_savefile, 'wb') as savefile:
+            pickle.dump(train_data, savefile)
+
+    else:
+        with open(train_data_savefile, 'rb') as loadfile:
+            train_data = pickle.load(loadfile)
+
     print('train data load complete!')
 
-    write_trace_file(False, collision, train_data=train_data)
+    write_trace_file(False, collisions, savefile=profile_savefile, train_data=train_data)
