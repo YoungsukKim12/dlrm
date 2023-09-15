@@ -5,14 +5,19 @@ import pickle
 import os
 import dlrm_data_pytorch as dp
 import sys
-from address_mapping import BasicAddressMapping, BGAddressMapping
+from address_translation import BasicAddressTranslation, BGAddressTranslation
 
 class MyProfiler:
 
     table_profiles = []
+    table_index = []
 
     @staticmethod
-    def set_qr_profile(q_len, r_len):
+    def set_qr_profile(table, q_len, r_len):
+        if table > 0:
+            for i in range(table-MyProfiler.table_index[-1]-1):
+                MyProfiler.table_profiles.append(np.zeros((1,1)))
+        MyProfiler.table_index.append(table)
         qr_profiles = np.zeros((q_len,r_len))
         MyProfiler.table_profiles.append(qr_profiles)
 
@@ -140,6 +145,28 @@ def write_profile_result(collisions, hot_q_ratio=0.01):
             total_access_list.append(total_access)
         write_table_profile_result(f, total_access_list)            
 
+def load_train_data(train_data_savefile):
+    print('loading train data...')
+    if not os.path.exists(train_data_savefile):
+        train_data = dp.CriteoDataset(
+            "kaggle",
+            -1,
+            0.0,
+            "total",
+            "train",
+            "./input/train.txt",
+            "./input/kaggleAdDisplayChallenge_processed.npz",
+            False,
+            False
+        )
+        with open(train_data_savefile, 'wb') as savefile:
+            pickle.dump(train_data, savefile)
+    else:
+        with open(train_data_savefile, 'rb') as loadfile:
+            train_data = pickle.load(loadfile)
+
+    print('train data load complete!')
+    return train_data
 
 def load_profile_result(called_inside_dlrm, savefile):
     profiles = None
@@ -157,106 +184,89 @@ def load_profile_result(called_inside_dlrm, savefile):
 
     return profiles
 
-def get_physical_address(addr_mapper, using_bg_map, table_index, vec_index, is_r_vec=False):
-    in_HBM, emb_physical_addr = addr_mapper.physical_address_mapping(table_index, vec_index, is_r_vec)
-
-    # if using_bg_map:
-    #     in_HBM, emb_physical_addr = addr_mapper.bankgroup_based_physical_address_mapping(table_index, vec_idx)
-    # else:
-    #     in_HBM, emb_physical_addr = addr_mapper.basic_physical_address_mapping(table_idx, vec_idx, is_r_vec, collisions)
-
+def get_physical_address(addr_translator, using_bg_map, table_index, vec_index, is_r_vec=False):
+    in_HBM, emb_physical_addr = addr_translator.physical_address_translation(table_index, vec_index, is_r_vec)
     return in_HBM, emb_physical_addr
 
 def write_trace_file(
         called_inside_dlrm=True,
-        collisions=4, 
-        readfile='./input/train.txt',
-        savefile='./profile.pickle', 
+        embedding_profile_savefile='./profile.pickle', 
         train_data=None, 
+        collisions=4, 
+        vec_size=64,
         using_bg_map=False
     ):
 
-    profiles = load_profile_result(called_inside_dlrm, savefile)
-    if not using_bg_map:
-        addr_mapper = BasicAddressMapping(profiles, collisions=collisions)
-    else:
-        addr_mapper = BGAddressMapping(profiles, collisions=collisions)
-
+    embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % collisions
     total_data = len(train_data)
+    default_vec_size = 64
+    total_burst = vec_size // default_vec_size
+    embedding_profiles = load_profile_result(called_inside_dlrm, embedding_profile_savefile)
 
     if using_bg_map:
-        writefile = './traces/bg_map_trace_col_%d.txt' % collisions
+        addr_mapper = BGAddressTranslation(embedding_profiles, collisions=collisions, vec_size=vec_size)
+        writefile = './traces/bg_map_trace_col_%d_vecsize_%d.txt' % (collisions, vec_size)
     else:
-        writefile = './traces/random_trace_col_%d.txt' % collisions
+        addr_mapper = BasicAddressTranslation(embedding_profiles, collisions=collisions, vec_size=vec_size)
+        writefile = './traces/random_trace_col_%d_vecsize_%d.txt' % (collisions, vec_size)
 
-    print("writing trace file...")
     with open(writefile, 'w') as wf:
         for i, data in enumerate(train_data):
-
             if i % 1024 == 0:
-                print(f"{i}/{total_data} processed")
+                print(f"{i}/{total_data} trace processed")
             if i > 20000:
                 print('done writing tracing file')
                 break
 
-            dense, feat, y = data
-            for j, emb in enumerate(feat):
+            _, feat, _ = data
+            for table, emb in enumerate(feat):
                 q_emb = emb // collisions
 
                 # write q vector
                 in_HBM, emb_physical_addr = get_physical_address(
-                                                addr_mapper=addr_mapper, 
+                                                addr_translator=addr_mapper, 
                                                 using_bg_map=using_bg_map, 
-                                                table_index=j, 
+                                                table_index=table, 
                                                 vec_index=q_emb,
                                                 is_r_vec=False
                                             )
                 device = "HBM" if in_HBM else "DIMM"
-                wf.write(f"{device} {emb_physical_addr}\n")
+                q_written_device = device
+                vec_type = "q" if collisions > 1 else "o"
+                for k in range(total_burst):
+                    wf.write(f"{device} {emb_physical_addr+default_vec_size * k} {vec_type}\n")
 
                 # write r vector                
-                if not using_bg_map:
-                    if collisions > 0:
-                        r_emb = emb % collisions
-                        in_HBM, emb_physical_addr = get_physical_address(
-                                                        addr_mapper=addr_mapper, 
-                                                        using_bg_map=using_bg_map, 
-                                                        table_index=j, 
-                                                        vec_index=r_emb,
-                                                        is_r_vec=True
-                                                    )
-                        device = "HBM" if in_HBM else "DIMM"
-                        wf.write(f"{device} {emb_physical_addr}\n")
+                if collisions > 1 and not using_bg_map:
+                    r_emb = emb % collisions
+                    in_HBM, emb_physical_addr = get_physical_address(
+                                                    addr_translator=addr_mapper, 
+                                                    using_bg_map=using_bg_map, 
+                                                    table_index=table, 
+                                                    vec_index=r_emb,
+                                                    is_r_vec=True
+                                                )
+                    device = "HBM" if in_HBM else "DIMM"
+                    if q_written_device == "HBM":
+                        for k in range(total_burst):
+                            wf.write(f"{device} {emb_physical_addr+default_vec_size * k} r\n")
             wf.write('\n')
-
 
 if __name__ == "__main__":
     profiles = None
-    profile_savefile = './savedata/profile.pickle'
+    collisions = [4, 8, 16]
+    vec_sizes = [64, 128, 256, 512]
     train_data_savefile = './savedata/train_data.pickle'
-    collisions = 4
-    print('loading train data...')
+    train_data = load_train_data(train_data_savefile)
 
-
-    if not os.path.exists(train_data_savefile):
-        train_data = dp.CriteoDataset(
-            "kaggle",
-            -1,
-            0.0,
-            "total",
-            "train",
-            "./input/train.txt",
-            "./input/kaggleAdDisplayChallenge_processed.npz",
-            False,
-            False
-        )
-        with open(train_data_savefile, 'wb') as savefile:
-            pickle.dump(train_data, savefile)
-
-    else:
-        with open(train_data_savefile, 'rb') as loadfile:
-            train_data = pickle.load(loadfile)
-
-    print('train data load complete!')
-
-    write_trace_file(False, collisions, savefile=profile_savefile, train_data=train_data)
+    for col in collisions:
+        for vec_size in vec_sizes:
+            print(f"Processing col={col}, vec_size={vec_size}")
+            embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % col
+            write_trace_file(called_inside_dlrm=False, 
+                            embedding_profile_savefile=embedding_profile_savefile, 
+                            train_data=train_data,
+                            collisions=col,
+                            vec_size=vec_size,
+                            using_bg_map=False
+                            )

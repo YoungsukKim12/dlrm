@@ -15,26 +15,26 @@ class HBMInfo():
     def generate_bit_width(self):
         size_in_byte = self.HBM_Size * math.pow(2, 30)
         DRAM_dies = self.HBM_Size
-        channel = DRAM_dies * 4
+        channel = DRAM_dies * 2 * 4
         rank = DRAM_dies // 4
 
         self.bit_width['channel'] = math.log2(channel)
         self.bit_width['rank'] = math.log2(rank)
 
-class AddressMapping():
-    def __init__(self, profiles, hot_access_ratio, collisions):
-        self.profiles = profiles
-        self.hot_access_ratio = hot_access_ratio
+class AddressTranslation():
+    def __init__(self, embedding_profiles, hot_vector_total_access, collisions):
+        self.embedding_profiles = embedding_profiles
+        self.hot_vector_total_access = hot_vector_total_access
         self.collisions = collisions
 
     def profile_hot_vec_location(self):
         '''
-            returns :  hot vector index list of each table
+            returns :  hot vector index list in each table
             
             hot vector index list is sorted for each table
         '''
 
-        table_len = len(self.profiles)
+        table_len = len(self.embedding_profiles)
         curr_idx_per_table = [0 for _ in range(table_len)]
         hot_vec_location = [[] for _ in range(table_len)]
 
@@ -49,7 +49,7 @@ class AddressMapping():
             hot_q_per_table = []
             hot_indices_per_table = []
 
-            for i, prof_per_table in enumerate(self.profiles):
+            for i, prof_per_table in enumerate(self.embedding_profiles):
                 total_access += np.sum(prof_per_table)
                 q_access = np.sum(prof_per_table, axis=1)
 
@@ -58,9 +58,9 @@ class AddressMapping():
                 hot_indices_per_table.append(hot_q_indices)
                 hot_q_per_table.append(hot_q_ranking)
 
-            hot_access_ratio = self.hot_access_ratio
+            hot_vector_total_access = self.hot_vector_total_access
 
-            while not hot_access_ratio < 0:
+            while not hot_vector_total_access < 0:
                 hot_vecs = [int(hot_q_ranking[curr_idx_per_table[table_id]]) if not curr_idx_per_table[table_id] == -1 else -10 for table_id, hot_q_ranking in enumerate(hot_q_per_table)]
                 top_hot_vec_table_id = np.argmax(hot_vecs)
                 top_hot_vec_access_ratio = np.max(hot_vecs)
@@ -72,7 +72,7 @@ class AddressMapping():
                 if len(hot_q_per_table[top_hot_vec_table_id]) == curr_idx_per_table[top_hot_vec_table_id]:
                     curr_idx_per_table[top_hot_vec_table_id] = -1
 
-                hot_access_ratio -= top_hot_vec_access_ratio / total_access
+                hot_vector_total_access -= top_hot_vec_access_ratio / total_access
 
             with open(hot_vector_savefile, 'wb') as savefile:
                 pickle.dump(hot_vec_location, savefile)
@@ -80,116 +80,118 @@ class AddressMapping():
         return hot_vec_location
 
     @abstractmethod
-    def physical_address_mapping(self, table_idx, vec_idx, is_r_vec=False):
+    def physical_address_translation(self, table_idx, vec_idx, is_r_vec=False):
         pass
 
-class BasicAddressMapping(AddressMapping):
+class BasicAddressTranslation(AddressTranslation):
 
     def __init__(
         self, 
-        profiles, 
+        embedding_profiles, 
         HBM_size_gb=4, 
         DIMM_size_gb=8, 
-        hot_access_ratio=0.7,
+        hot_vector_total_access=0.7,
         vec_size = 64,
         end_iter=20000,
         collisions=4
     ):
-        super().__init__(profiles, hot_access_ratio, collisions)
+        super().__init__(embedding_profiles, hot_vector_total_access, collisions)
         self.is_QR = True
         self.vec_size = vec_size
         self.collisions = collisions
         self.page_offset = math.pow(2, 12)
         self.hot_vec_loc = self.profile_hot_vec_location()
-        self.DRAM_table_start_address, self.HBM_table_start_address = self.basic_logical_address_mapping(self.hot_vec_loc, self.profiles, self.vec_size, self.collisions)
+        self.DIMM_table_start_address, self.HBM_table_start_address = self.basic_logical_address_translation(self.hot_vec_loc, self.embedding_profiles, self.vec_size, self.collisions)
 
-        # DRAM size and ppns
+        # DIMM size and ppns
         GB_size = math.pow(2, 30)
         HBM_Size = HBM_size_gb * GB_size
-        DRAM_Size = DIMM_size_gb * GB_size
+        DIMM_Size = DIMM_size_gb * GB_size
         HBM_max_page_number = int(HBM_Size // self.page_offset)
-        DRAM_max_page_number = int(DRAM_Size // self.page_offset)
-        HBM_ppn_bits = int(math.log2(HBM_max_page_number))
+        DIMM_max_page_number = int(DIMM_Size // self.page_offset)
 
         # for basic address mapping (use random vpn -> ppn mapping)
         self.HBM_page_translation = [i for i in range(HBM_max_page_number)]
-        self.DRAM_page_translation = [i for i in range(DRAM_max_page_number)]
+        self.DIMM_page_translation = [i for i in range(DIMM_max_page_number)]
         random.shuffle(self.HBM_page_translation)
-        random.shuffle(self.DRAM_page_translation)
+        random.shuffle(self.DIMM_page_translation)
 
-    def basic_logical_address_mapping(self, hot_vec_loc, profiles, vec_size, collisions):        
-        DRAM_space_per_table = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(profiles)]
+    def basic_logical_address_translation(self, hot_vec_loc, embedding_profiles, vec_size, collisions):        
+        DIMM_space_per_table = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(embedding_profiles)]
         HBM_space_per_table = [0 + vec_size * (collisions+len(hot_vec_loc[i])) for i in range(len(hot_vec_loc))]
-        DRAM_table_start_address = []
+        DIMM_table_start_address = []
         HBM_table_start_address = []
 
-        accumulation = 0
-        for i in range(len(DRAM_space_per_table)):
-            DRAM_table_start_address.append(accumulation)
-            accumulation += DRAM_space_per_table[i]
+        DIMM_accumulation = 0
+        for i in range(len(DIMM_space_per_table)):
+            DIMM_table_start_address.append(DIMM_accumulation)
+            DIMM_accumulation += DIMM_space_per_table[i]
 
-        accumulation = 0
+        HBM_accumulation = 0
         for i in range(len(HBM_space_per_table)):
-            HBM_table_start_address.append(accumulation)
-            accumulation += HBM_space_per_table[i]
+            HBM_table_start_address.append(HBM_accumulation)
+            HBM_accumulation += HBM_space_per_table[i]
 
         ################################## Test ##################################
 
-        # for i, prof_per_table in enumerate(profiles):
-        #     print("profiles in table %d : %d" %(i, prof_per_table.shape[0]))
+        # for i, prof_per_table in enumerate(embedding_profiles):
+        #     print("embedding_profiles in table %d : %d" %(i, prof_per_table.shape[0]))
 
         # for i, hot_vecs in enumerate(hot_vec_loc):
         #     print("hot vecs in table %d : %d" %(i, len(hot_vec_loc[i])))
 
-        # for i in range(len(profiles)):
-        #     print("vectors of table %d : %d" %(i, profiles[i].shape[0] - len(hot_vec_loc[i])))
+        # for i in range(len(embedding_profiles)):
+        #     print("vectors of table %d : %d" %(i, embedding_profiles[i].shape[0] - len(hot_vec_loc[i])))
 
-        # for i in range(len(DRAM_table_start_address)):
+        # for i in range(len(DIMM_table_start_address)):
         #     if i > 0:
-        #         print("vectors between tables : ", int((DRAM_table_start_address[i] - DRAM_table_start_address[i-1])/vec_size))
+        #         print("vectors between tables : ", int((DIMM_table_start_address[i] - DIMM_table_start_address[i-1])/vec_size))
 
-        return DRAM_table_start_address, HBM_table_start_address
+        return DIMM_table_start_address, HBM_table_start_address
 
-    def physical_address_mapping(self, table_idx, vec_idx, is_r_vec=False):    
+
+    def physical_address_translation(self, table_idx, vec_idx, is_r_vec=False):    
         ## r vec is located at the front of the table
         HBM_loc = False
 
         # generate ppn
         if vec_idx in self.hot_vec_loc[table_idx] or is_r_vec:
-            logical_address = self.HBM_table_start_address[table_idx]
-            table_start_vpn = int(logical_address // self.page_offset)        
+            table_start_logical_address = self.HBM_table_start_address[table_idx]
+            table_start_vpn = int(table_start_logical_address // self.page_offset)        
+            table_start_po = int(table_start_logical_address % self.page_offset)
             ppn = self.HBM_page_translation[table_start_vpn]
             HBM_loc = True
         else:
-            logical_address = self.DRAM_table_start_address[table_idx]
-            table_start_vpn = int(logical_address // self.page_offset)
-            ppn = self.DRAM_page_translation[table_start_vpn]
+            table_start_logical_address = self.DIMM_table_start_address[table_idx]
+            table_start_vpn = int(table_start_logical_address // self.page_offset)
+            table_start_po = int(table_start_logical_address % self.page_offset)
+            ppn = self.DIMM_page_translation[table_start_vpn]
 
 
         # generate physical address        
         if HBM_loc:
             if self.collisions > 0:
                 if not is_r_vec:
-                    physical_addr = int(ppn*self.page_offset + (self.collisions+vec_idx)*self.vec_size)
+                    physical_addr = int(ppn*self.page_offset + table_start_po + (self.collisions+vec_idx)*self.vec_size)
                 else:
-                    physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
+                    physical_addr = int(ppn*self.page_offset + table_start_po + vec_idx*self.vec_size)
             else:
-                physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
+                physical_addr = int(ppn*self.page_offset + table_start_po + vec_idx*self.vec_size)
         else:
-                physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
+                physical_addr = int(ppn*self.page_offset + table_start_po + vec_idx*self.vec_size)
 
         ################################## Test ##################################
 
         # if not HBM_loc:
         #     extracted_ppn = (physical_addr - vec_idx*self.vec_size) / self.page_offset
-        #     extracted_table_start_vpn = self.DRAM_page_translation.index(extracted_ppn)
+        #     extracted_table_start_vpn = self.DIMM_page_translation.index(extracted_ppn)
         #     print("extracted ppn : %d" %extracted_ppn)
         #     print("extracted table start vpn : %d" %(extracted_table_start_vpn))
 
         #     if(extracted_ppn == ppn and extracted_table_start_vpn == table_start_vpn):
-        #         print("test pass : vec in DRAM")
+        #         print("test pass : vec in DIMM")
         #     else:
-        #         print("test fail on DRAM")
+        #         print("test fail on DIMM")
         #         sys.exit()
         # else:
         #     if not is_r_vec:
@@ -217,34 +219,34 @@ class BasicAddressMapping(AddressMapping):
 
         return HBM_loc, physical_addr
 
-class BGAddressMapping(AddressMapping):
+class BGAddressTranslation(AddressTranslation):
     def __init__(
         self, 
-        profiles, 
+        embedding_profiles, 
         HBM_size_gb=4, 
         DIMM_size_gb=8, 
-        hot_access_ratio=0.7,
+        hot_vector_total_access=0.7,
         vec_size = 64,
         end_iter=20000,
         collisions = 4,
-        tables_per_bankgroup=3
+        tables_per_bankgroup=6
     ):
 
-        super().__init__(profiles, hot_access_ratio, collisions)
+        super().__init__(embedding_profiles, hot_vector_total_access, collisions)
         # basic parameters
-        self.profiles = profiles
-        self.hot_access_ratio = hot_access_ratio
+        self.embedding_profiles = embedding_profiles
+        self.hot_vector_total_access = hot_vector_total_access
         self.vec_size = vec_size
         self.page_offset = math.pow(2, 12)
         self.tables_per_bankgroup = 3
         self.collisions = collisions
 
-        # DRAM size and ppns
+        # DIMM size and ppns
         GB_size = math.pow(2, 30)
         HBM_Size = HBM_size_gb * GB_size
-        DRAM_Size = DIMM_size_gb * GB_size
+        DIMM_Size = DIMM_size_gb * GB_size
         HBM_max_page_number = int(HBM_Size // self.page_offset)
-        DRAM_max_page_number = int(DRAM_Size // self.page_offset)
+        DIMM_max_page_number = int(DIMM_Size // self.page_offset)
         HBM_ppn_bits = int(math.log2(HBM_max_page_number))
         self.HBM_bits = HBMInfo(HBM_size_gb)
 
@@ -256,11 +258,11 @@ class BGAddressMapping(AddressMapping):
 
         # preprocess
         self.hot_vec_loc = self.profile_hot_vec_location()
-        self.table_record, self.bg_record = self.bankgroup_based_logical_address_mapping(self.total_bankgroups, self.tables_per_bankgroup, self.hot_vec_loc, self.bankgroup_size, self.vec_size)
-        self.DRAM_table_start_address = self.basic_logical_address_mapping(self.hot_vec_loc, self.profiles, self.vec_size)
+        self.table_record, self.bg_record = self.bankgroup_based_logical_address_translation(self.total_bankgroups, self.tables_per_bankgroup, self.hot_vec_loc, self.bankgroup_size, self.vec_size)
+        self.DIMM_table_start_address = self.basic_logical_address_translation(self.hot_vec_loc, self.embedding_profiles, self.vec_size)
 
-        self.DRAM_page_translation = [i for i in range(DRAM_max_page_number)]
-        random.shuffle(self.DRAM_page_translation)
+        self.DIMM_page_translation = [i for i in range(DIMM_max_page_number)]
+        random.shuffle(self.DIMM_page_translation)
 
 
         self.bg_based_mapping_row = [i for i in range(int(math.pow(2, self.HBM_bits.bit_width['row'])))]
@@ -274,20 +276,20 @@ class BGAddressMapping(AddressMapping):
         # for i in range(len(self.hot_vec_loc)):
         #     print("table # %d hot vecs : %d" %(i, len(self.hot_vec_loc[i])))
 
-    def basic_logical_address_mapping(self, hot_vec_loc, profiles, vec_size):        
-        DRAM_space_per_table = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(profiles)]
-        DRAM_table_start_address = []
+    def basic_logical_address_translation(self, hot_vec_loc, embedding_profiles, vec_size):        
+        DIMM_space_per_table = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(embedding_profiles)]
+        DIMM_table_start_address = []
 
         accumulation = 0
-        for i in range(len(DRAM_space_per_table)):
-            DRAM_table_start_address.append(accumulation)
-            accumulation += DRAM_space_per_table[i]
+        for i in range(len(DIMM_space_per_table)):
+            DIMM_table_start_address.append(accumulation)
+            accumulation += DIMM_space_per_table[i]
 
 
-        return DRAM_table_start_address
+        return DIMM_table_start_address
 
 
-    def bankgroup_based_logical_address_mapping(self, total_bankgroups, tables_per_bankgroup, hot_vec_loc, bankgroup_size, vector_size):
+    def bankgroup_based_logical_address_translation(self, total_bankgroups, tables_per_bankgroup, hot_vec_loc, bankgroup_size, vector_size):
         '''
             performs logical address mapping regarding hot vector ranking and bank group size.
             fetch hot vectors from given tables_per_bankgroup, put them inside the same bank group.
@@ -429,7 +431,7 @@ class BGAddressMapping(AddressMapping):
 
         return ppn
 
-    def physical_address_mapping(self, table_idx, vec_idx, is_r_vec=False):
+    def physical_address_translation(self, table_idx, vec_idx, is_r_vec=False):
 
         if vec_idx in self.hot_vec_loc[table_idx]:
             HBM_loc = True
@@ -472,31 +474,31 @@ class BGAddressMapping(AddressMapping):
 
         else:
             HBM_loc = False
-            logical_address = self.DRAM_table_start_address[table_idx]
+            logical_address = self.DIMM_table_start_address[table_idx]
             table_start_vpn = int(logical_address // self.page_offset)
-            ppn = self.DRAM_page_translation[table_start_vpn]       
+            ppn = self.DIMM_page_translation[table_start_vpn]       
             physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
 
         return HBM_loc, physical_addr
 
 
 # same as basic address mapping if not using partial sum
-class SpaceAddressMapping():
+class SpaceAddressTranslation():
     def __init__(
         self, 
-        profiles, 
+        embedding_profiles, 
         HBM_size_gb=4, 
         DIMM_size_gb=8, 
-        hot_access_ratio=0.7,
+        hot_vector_total_access=0.7,
         vec_size = 64,
         end_iter=20000, 
     ):
 
         super().__init__()
         self.HBM_size_in_bytes = HBM_size_gb * math.pow(2, 30)
-        self.hot_vec_loc = self.profile_hot_vec_location(self.profiles, self.hot_access_ratio)
-        self.DRAM_table_start_address, self.HBM_table_start_address = self.basic_logical_address_mapping(self.hot_vec_loc, self.profiles, self.vec_size, self.collisions)
-        self.partial_sums = self.partial_sum_address_mapping(self.HBM_table_start_address, HBM_size_in_bytes, vec_size)
+        self.hot_vec_loc = self.profile_hot_vec_location(self.embedding_profiles, self.hot_vector_total_access)
+        self.DIMM_table_start_address, self.HBM_table_start_address = self.basic_logical_address_translation(self.hot_vec_loc, self.embedding_profiles, self.vec_size, self.collisions)
+        self.partial_sums = self.partial_sum_address_translation(self.HBM_table_start_address, HBM_size_in_bytes, vec_size)
 
     def combination(self, n:int, k:int):
         n_fac = math.factorial(n)
@@ -506,26 +508,26 @@ class SpaceAddressMapping():
 
         return total_combination
 
-    def basic_logical_address_mapping(self, hot_vec_loc, profiles, vec_size, collisions):
+    def basic_logical_address_translation(self, hot_vec_loc, embedding_profiles, vec_size, collisions):
         
         for hot_vecs in hot_vec_loc:
             print("hot vecs in table %d : %d" %(i, hot_vec_loc[i]))
 
-        DRAM_table_start_address = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(profiles)]
-        DRAM_table_start_address.insert(0, 0)
+        DIMM_table_start_address = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(embedding_profiles)]
+        DIMM_table_start_address.insert(0, 0)
 
-        for i in range(len(DRAM_table_start_address)):
-            print("table start address :", DRAM_table_start_address[i])
+        for i in range(len(DIMM_table_start_address)):
+            print("table start address :", DIMM_table_start_address[i])
             if i > 1:
-                print("vectors between tables : ", (DRAM_table_start_address[i] - DRAM_table_start_address[i-1])/vec_size)
+                print("vectors between tables : ", (DIMM_table_start_address[i] - DIMM_table_start_address[i-1])/vec_size)
 
 
         HBM_table_start_address = [0 + vec_size * (collisions+len(hot_vec_loc[i])) for i in range(len(hot_vec_loc))]
         HBM_table_start_address.insert(0, 0) 
 
-        return DRAM_table_start_address, HBM_table_start_address
+        return DIMM_table_start_address, HBM_table_start_address
 
-    def basic_physical_address_mapping(self, table_idx, vec_idx, is_r_vec=False, collisions=0):
+    def basic_physical_address_translation(self, table_idx, vec_idx, is_r_vec=False, collisions=0):
         ## r vec is located at the front of the table
 
         # generate ppn
@@ -536,9 +538,9 @@ class SpaceAddressMapping():
             ppn = self.HBM_page_translation[table_start_vpn]
             HBM_loc = True
         else:
-            logical_address = self.DRAM_table_start_address[table_idx]
+            logical_address = self.DIMM_table_start_address[table_idx]
             table_start_vpn = int(logical_address // self.page_offset)
-            ppn = self.DRAM_page_translation[table_start_vpn]
+            ppn = self.DIMM_page_translation[table_start_vpn]
 
         # generate physical address        
         if HBM_loc:
@@ -553,7 +555,7 @@ class SpaceAddressMapping():
 
 
 '''
-    def partial_sum_address_mapping(self, HBM_table_start_address, HBM_size_in_bytes, vec_size):
+    def partial_sum_address_translation(self, HBM_table_start_address, HBM_size_in_bytes, vec_size):
 
         used_HBM_memory = HBM_table_start_address[-1]
         available_HBM_memory = HBM_size_in_bytes - used_HBM_memory
