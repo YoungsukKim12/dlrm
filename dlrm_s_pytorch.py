@@ -97,6 +97,9 @@ from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
 
+sys.path.insert(0, '..')
+import my_profiler as myprofiler
+
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     try:
@@ -236,6 +239,9 @@ class DLRM_Net(nn.Module):
     def create_emb(self, m, ln, weighted_pooling=None):
         emb_l = nn.ModuleList()
         v_W_l = []
+        # yskim space
+        print('total tables: ', ln.size)
+        print('total embeddings: ', np.sum(ln))
         for i in range(0, ln.size):
             if ext_dist.my_size > 1:
                 if i not in self.local_emb_indices:
@@ -251,7 +257,14 @@ class DLRM_Net(nn.Module):
                     operation=self.qr_operation,
                     mode="sum",
                     sparse=True,
+                    expand=self.qr_expand
                 )
+
+                # yskim space
+                q_len, r_len = EE.get_qr_size()
+                myprofiler.MyProfiler.set_qr_profile(q_len, r_len)
+
+
             elif self.md_flag and n > self.md_threshold:
                 base = max(m)
                 _m = m[i] if n > self.md_threshold else base
@@ -278,7 +291,10 @@ class DLRM_Net(nn.Module):
                 v_W_l.append(None)
             else:
                 v_W_l.append(torch.ones(n, dtype=torch.float32))
+
             emb_l.append(EE)
+        compressed_embs = myprofiler.total_compressed_embs()
+        print("total compressed embeddings: ", compressed_embs)
         return emb_l, v_W_l
 
     def __init__(
@@ -298,6 +314,7 @@ class DLRM_Net(nn.Module):
         qr_operation="mult",
         qr_collisions=0,
         qr_threshold=200,
+        qr_expand=1,
         md_flag=False,
         md_threshold=200,
         weighted_pooling=None,
@@ -333,6 +350,8 @@ class DLRM_Net(nn.Module):
                 self.qr_collisions = qr_collisions
                 self.qr_operation = qr_operation
                 self.qr_threshold = qr_threshold
+                self.qr_expand = qr_expand
+                print('qr collision : %d, expand : %d' %(self.qr_collisions, self.qr_expand))
             # create variables for MD embedding if applicable
             self.md_flag = md_flag
             if self.md_flag:
@@ -439,11 +458,21 @@ class DLRM_Net(nn.Module):
                 ly.append(QV)
             else:
                 E = emb_l[k]
-                V = E(
+                # sparse_index_group_batch : each table / sparse_offset_group_batch : table index
+                if args.qr_flag:
+                    # yskim space
+                    V = E(
+                    k,
                     sparse_index_group_batch,
                     sparse_offset_group_batch,
                     per_sample_weights=per_sample_weights,
-                )
+                    )
+                else:
+                    V = E(
+                        sparse_index_group_batch,
+                        sparse_offset_group_batch,
+                        per_sample_weights=per_sample_weights,
+                    )
 
                 ly.append(V)
 
@@ -471,7 +500,6 @@ class DLRM_Net(nn.Module):
         self.quantize_bits = bits
 
     def interact_features(self, x, ly):
-
         if self.arch_interaction_op == "dot":
             # concatenate dense and sparse features
             (batch_size, d) = x.shape
@@ -887,7 +915,7 @@ def inference(
             ),
             flush=True,
         )
-    return model_metrics_dict, is_best
+    return model_metrics_dict, is_best, acc_test
 
 
 def run():
@@ -917,6 +945,9 @@ def run():
     parser.add_argument("--qr-threshold", type=int, default=200)
     parser.add_argument("--qr-operation", type=str, default="mult")
     parser.add_argument("--qr-collisions", type=int, default=4)
+    # yskim space
+    parser.add_argument("--qr-expand", type=int, default=1)
+
     # activations and loss
     parser.add_argument("--activation-function", type=str, default="relu")
     parser.add_argument("--loss-function", type=str, default="mse")  # or bce or wbce
@@ -1013,7 +1044,7 @@ def run():
     global nbatches_test
     global writer
     args = parser.parse_args()
-
+    #print("enable_profiling : ", args.enable_profiling)
     if args.dataset_multiprocessing:
         assert float(sys.version[:3]) > 3.7, "The dataset_multiprocessing " + \
         "flag is susceptible to a bug in Python 3.7 and under. " + \
@@ -1274,6 +1305,7 @@ def run():
         qr_operation=args.qr_operation,
         qr_collisions=args.qr_collisions,
         qr_threshold=args.qr_threshold,
+        qr_expand=args.qr_expand,
         md_flag=args.md_flag,
         md_threshold=args.md_threshold,
         weighted_pooling=args.weighted_pooling,
@@ -1312,13 +1344,15 @@ def run():
             dlrm.top_l = ext_dist.DDP(dlrm.top_l)
 
     if not args.inference_only:
-        if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
+        if use_gpu and args.optimizer in ["rwsadagrad"]:
+        # if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
             sys.exit("GPU version of Adagrad is not supported by PyTorch.")
         # specify the optimizer algorithm
         opts = {
             "sgd": torch.optim.SGD,
             "rwsadagrad": RowWiseSparseAdagrad.RWSAdagrad,
             "adagrad": torch.optim.Adagrad,
+            "Adam" : torch.optim.SparseAdam
         }
 
         parameters = (
@@ -1342,7 +1376,11 @@ def run():
                 },
             ]
         )
-        optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
+        if args.optimizer == 'Adam':
+            optimizer = torch.optim.Adam(parameters, lr=args.learning_rate, amsgrad=True)
+        else:
+            optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
+
         lr_scheduler = LRPolicyScheduler(
             optimizer,
             args.lr_num_warmup_steps,
@@ -1485,6 +1523,10 @@ def run():
     tb_file = "./" + args.tensor_board_filename
     writer = SummaryWriter(tb_file)
 
+    # train
+    print("nbatches : ", nbatches)
+    print("train loop len : ", len(train_ld))
+
     ext_dist.barrier()
     with torch.autograd.profiler.profile(
         args.enable_profiling, use_cuda=use_gpu, record_shapes=True
@@ -1514,6 +1556,7 @@ def run():
                 if args.mlperf_logging:
                     previous_iteration_time = None
 
+                # train loop
                 for j, inputBatch in enumerate(train_ld):
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
@@ -1658,7 +1701,7 @@ def run():
                         print(
                             "Testing at - {}/{} of epoch {},".format(j + 1, nbatches, k)
                         )
-                        model_metrics_dict, is_best = inference(
+                        model_metrics_dict, is_best, accuracy = inference(
                             args,
                             dlrm,
                             best_acc_test,
@@ -1668,6 +1711,9 @@ def run():
                             use_gpu,
                             log_iter,
                         )
+
+                        if is_best:
+                            best_acc_test = accuracy
 
                         if (
                             is_best
@@ -1760,6 +1806,9 @@ def run():
                 device,
                 use_gpu,
             )
+
+    myprofiler.write_profile_result(args.qr_collisions)
+    myprofiler.write_trace_file(args.qr_collisions)
 
     # profiling
     if args.enable_profiling:

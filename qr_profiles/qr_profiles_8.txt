@@ -1,0 +1,359 @@
+                          <<At table 0>>
+
+total q # :  183
+
+0 idx : 0.316   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.1661  0.03098 0.16587 0.1661  0.05791 0.08309 0.16385 0.1661 ]  
+<r ratio at total> :  [0.15838 0.10848 0.10184 0.1618  0.08581 0.11088 0.14571 0.12711] 
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 1>>
+
+total q # :  73
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 2>>
+
+total q # :  1266404
+
+1 idx : 0.019   11 idx : 0.015   0 idx : 0.014   
+4 idx : 0.012   15 idx : 0.010   5 idx : 0.009   
+2 idx : 0.008   8 idx : 0.008   39 idx : 0.007   
+45 idx : 0.007   94 idx : 0.006   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.1201  0.11914 0.13067 0.10879 0.11299 0.11716 0.13305 0.1581 ]  
+<r ratio at total> :  [0.12181 0.12169 0.12856 0.11547 0.11784 0.12033 0.12975 0.14456] 
+
+cold q vectors:
+total 0-access q vectors : 162363
+
+                          <<At table 3>>
+
+total q # :  275326
+
+0 idx : 0.028   1 idx : 0.019   7 idx : 0.018   
+10 idx : 0.018   13 idx : 0.015   2 idx : 0.012   
+4 idx : 0.012   34 idx : 0.011   5 idx : 0.010   
+9 idx : 0.010   14 idx : 0.009   38 idx : 0.008   
+16 idx : 0.007   36 idx : 0.007   37 idx : 0.006   
+24 idx : 0.006   79 idx : 0.006   29 idx : 0.006   
+19 idx : 0.005   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.13404 0.11835 0.11547 0.13852 0.11846 0.12009 0.11752 0.13756]  
+<r ratio at total> :  [0.13184 0.12012 0.11758 0.13504 0.12024 0.12126 0.11978 0.13415] 
+
+cold q vectors:
+total 0-access q vectors : 29642
+
+                          <<At table 4>>
+
+total q # :  39
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 5>>
+
+total q # :  3
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 6>>
+
+total q # :  1565
+
+3 idx : 0.013   31 idx : 0.013   4 idx : 0.011   
+1 idx : 0.011   20 idx : 0.010   22 idx : 0.009   
+34 idx : 0.008   15 idx : 0.007   32 idx : 0.007   
+9 idx : 0.007   2 idx : 0.007   0 idx : 0.007   
+35 idx : 0.007   18 idx : 0.007   41 idx : 0.007   
+
+                            <<r in top q>>
+<r ratio at hot qs> : [0.15796 0.14739 0.16092 0.06353 0.1134  0.18154 0.05998 0.11527]  
+<r ratio at total> :  [0.1197  0.14433 0.13771 0.11669 0.12002 0.13211 0.11106 0.11839] 
+
+cold q vectors:
+total 0-access q vectors : 8
+
+                          <<At table 7>>
+
+total q # :  80
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 8>>
+
+total q # :  1
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 9>>
+
+total q # :  11644
+
+0 idx : 0.028   2 idx : 0.012   13 idx : 0.011   
+1 idx : 0.010   5 idx : 0.009   9 idx : 0.008   
+11 idx : 0.008   4 idx : 0.008   34 idx : 0.008   
+3 idx : 0.007   7 idx : 0.007   15 idx : 0.007   
+21 idx : 0.007   24 idx : 0.006   26 idx : 0.006   
+22 idx : 0.006   18 idx : 0.006   82 idx : 0.006   
+108 idx : 0.006   27 idx : 0.006   42 idx : 0.006   
+29 idx : 0.006   33 idx : 0.006   58 idx : 0.005   
+32 idx : 0.005   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.10377 0.14548 0.13867 0.12924 0.10527 0.10977 0.12808 0.13973]  
+<r ratio at total> :  [0.12359 0.13087 0.13108 0.12641 0.11472 0.12003 0.12406 0.12922] 
+
+cold q vectors:
+total 0-access q vectors : 396
+
+                          <<At table 10>>
+
+total q # :  711
+
+3 idx : 0.019   1 idx : 0.018   4 idx : 0.016   
+19 idx : 0.015   6 idx : 0.013   59 idx : 0.013   
+23 idx : 0.012   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.09367 0.22711 0.06884 0.14476 0.09476 0.12233 0.11274 0.13579]  
+<r ratio at total> :  [0.12139 0.13499 0.12109 0.11785 0.14323 0.12077 0.12295 0.11774] 
+
+cold q vectors:
+total 0-access q vectors : 8
+
+                          <<At table 11>>
+
+total q # :  1043950
+
+1 idx : 0.019   15 idx : 0.019   0 idx : 0.017   
+11 idx : 0.015   4 idx : 0.013   5 idx : 0.010   
+38 idx : 0.009   2 idx : 0.008   8 idx : 0.008   
+17 idx : 0.007   43 idx : 0.006   41 idx : 0.006   
+91 idx : 0.005   10 idx : 0.005   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.11093 0.14484 0.13785 0.12831 0.10827 0.10549 0.11403 0.15028]  
+<r ratio at total> :  [0.11615 0.13731 0.13287 0.12718 0.11469 0.11291 0.11808 0.14081] 
+
+cold q vectors:
+total 0-access q vectors : 130728
+
+                          <<At table 12>>
+
+total q # :  400
+
+3 idx : 0.024   6 idx : 0.022   1 idx : 0.020   
+0 idx : 0.019   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.11935 0.0848  0.02262 0.24145 0.16684 0.0377  0.18056 0.14669]  
+<r ratio at total> :  [0.13358 0.1349  0.12203 0.12129 0.12805 0.11229 0.12881 0.11906] 
+
+cold q vectors:
+total 0-access q vectors : 2
+
+                          <<At table 13>>
+
+total q # :  4
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 14>>
+
+total q # :  1874
+
+6 idx : 0.026   15 idx : 0.017   8 idx : 0.016   
+2 idx : 0.016   10 idx : 0.015   19 idx : 0.015   
+12 idx : 0.014   18 idx : 0.014   7 idx : 0.014   
+13 idx : 0.013   9 idx : 0.013   40 idx : 0.013   
+0 idx : 0.013   5 idx : 0.012   16 idx : 0.011   
+1 idx : 0.011   21 idx : 0.010   41 idx : 0.010   
+
+                            <<r in top q>>
+<r ratio at hot qs> : [0.12697 0.11511 0.06607 0.10813 0.18813 0.13346 0.14201 0.12012]  
+<r ratio at total> :  [0.13094 0.11887 0.11591 0.11995 0.14474 0.12445 0.12569 0.11945] 
+
+cold q vectors:
+total 0-access q vectors : 30
+
+                          <<At table 15>>
+
+total q # :  682664
+
+1 idx : 0.026   0 idx : 0.019   15 idx : 0.016   
+11 idx : 0.015   8 idx : 0.015   4 idx : 0.014   
+5 idx : 0.009   2 idx : 0.009   14 idx : 0.008   
+36 idx : 0.008   41 idx : 0.007   86 idx : 0.007   
+39 idx : 0.006   10 idx : 0.006   21 idx : 0.005   
+
+                            <<r in top q>>
+<r ratio at hot qs> : [0.14013 0.11898 0.11586 0.11935 0.14845 0.11953 0.1362  0.10151]  
+<r ratio at total> :  [0.13525 0.12093 0.11851 0.12115 0.14128 0.12125 0.13301 0.10861] 
+
+cold q vectors:
+total 0-access q vectors : 81177
+
+                          <<At table 16>>
+
+total q # :  2
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 17>>
+
+total q # :  707
+
+6 idx : 0.037   4 idx : 0.033   12 idx : 0.031   
+0 idx : 0.027   1 idx : 0.027   10 idx : 0.027   
+7 idx : 0.025   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.17259 0.11219 0.07166 0.12461 0.18216 0.11706 0.09754 0.1222 ]  
+<r ratio at total> :  [0.1351  0.11375 0.10991 0.13048 0.13103 0.11531 0.13608 0.12835] 
+
+cold q vectors:
+total 0-access q vectors : 9
+
+                          <<At table 18>>
+
+total q # :  272
+
+0 idx : 0.115   1 idx : 0.063   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.23554 0.23316 0.0461  0.11606 0.01584 0.02558 0.32128 0.00644]  
+<r ratio at total> :  [0.15594 0.14372 0.13622 0.10756 0.08198 0.10085 0.16529 0.10844] 
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 19>>
+
+total q # :  1
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 20>>
+
+total q # :  880819
+
+1 idx : 0.025   0 idx : 0.019   15 idx : 0.019   
+11 idx : 0.017   4 idx : 0.013   5 idx : 0.010   
+37 idx : 0.009   2 idx : 0.009   8 idx : 0.008   
+42 idx : 0.007   17 idx : 0.007   40 idx : 0.007   
+89 idx : 0.005   10 idx : 0.005   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.13054 0.13325 0.11714 0.12749 0.12749 0.107   0.11974 0.13736]  
+<r ratio at total> :  [0.12859 0.1304  0.11992 0.12647 0.12661 0.11348 0.1217  0.13285] 
+
+cold q vectors:
+total 0-access q vectors : 107844
+
+                          <<At table 21>>
+
+total q # :  3
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 22>>
+
+total q # :  2
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 23>>
+
+total q # :  35773
+
+0 idx : 0.048   2 idx : 0.031   11 idx : 0.028   
+1 idx : 0.027   8 idx : 0.025   5 idx : 0.020   
+7 idx : 0.015   15 idx : 0.013   30 idx : 0.012   
+6 idx : 0.011   29 idx : 0.010   58 idx : 0.010   
+23 idx : 0.010   13 idx : 0.008   4 idx : 0.008   
+18 idx : 0.008   12 idx : 0.008   24 idx : 0.007   
+21 idx : 0.007   14 idx : 0.007   42 idx : 0.007   
+10 idx : 0.006   19 idx : 0.006   22 idx : 0.006   
+36 idx : 0.006   57 idx : 0.005   3 idx : 0.005   
+28 idx : 0.005   110 idx : 0.005   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.10143 0.14024 0.11181 0.16254 0.13821 0.12121 0.10817 0.1164 ]  
+<r ratio at total> :  [0.10677 0.13547 0.11637 0.15373 0.13322 0.12187 0.11297 0.1196 ] 
+
+cold q vectors:
+total 0-access q vectors : 2472
+
+                          <<At table 24>>
+
+total q # :  14
+
+
+                            <<r in top q>>
+
+cold q vectors:
+total 0-access q vectors : 0
+
+                          <<At table 25>>
+
+total q # :  17822
+
+0 idx : 0.043   5 idx : 0.037   6 idx : 0.035   
+3 idx : 0.031   1 idx : 0.029   18 idx : 0.014   
+4 idx : 0.012   41 idx : 0.012   21 idx : 0.009   
+29 idx : 0.009   27 idx : 0.009   16 idx : 0.008   
+45 idx : 0.008   25 idx : 0.008   9 idx : 0.007   
+47 idx : 0.007   32 idx : 0.007   30 idx : 0.006   
+13 idx : 0.006   66 idx : 0.006   11 idx : 0.006   
+26 idx : 0.006   34 idx : 0.006   35 idx : 0.006   
+28 idx : 0.006   22 idx : 0.005   50 idx : 0.005   
+44 idx : 0.005   8 idx : 0.005   
+                            <<r in top q>>
+<r ratio at hot qs> : [0.14302 0.13361 0.13364 0.13617 0.08941 0.08537 0.17234 0.10645]  
+<r ratio at total> :  [0.13588 0.13118 0.12917 0.13065 0.09927 0.10273 0.15725 0.11388] 
+
+cold q vectors:
+total 0-access q vectors : 848
+
+hot tables : [ 6  2 11 20 14 15 10 12  3  9 17 23  1 25 18  0 24  7 13  4 22 16  5 21
+ 19]
+ratio : [0.07664 0.07504 0.07369 0.07321 0.07278 0.07272 0.07145 0.06922 0.06918
+ 0.06205 0.06129 0.05745 0.04208 0.03893 0.01663 0.01243 0.00942 0.00884
+ 0.00679 0.00671 0.00618 0.00584 0.00451 0.00298 0.00261]
