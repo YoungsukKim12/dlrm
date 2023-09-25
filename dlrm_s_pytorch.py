@@ -262,7 +262,7 @@ class DLRM_Net(nn.Module):
 
                 # yskim space
                 q_len, r_len = EE.get_qr_size()
-                myprofiler.MyProfiler.set_qr_profile(q_len, r_len)
+                myprofiler.MyProfiler.set_qr_profile(i, q_len, r_len)
 
 
             elif self.md_flag and n > self.md_threshold:
@@ -1087,6 +1087,8 @@ def run():
     if args.test_num_workers < 0:
         # if the parameter is not set, use the same parameter for training
         args.test_num_workers = args.num_workers
+
+    print(torch.cuda.is_available())
 
     use_gpu = args.use_gpu and torch.cuda.is_available()
 

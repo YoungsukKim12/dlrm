@@ -133,7 +133,7 @@ def total_compressed_embs():
         tot_embs += table.shape[1]
     return tot_embs
 
-def write_profile_result(collisions, hot_q_ratio=0.01):
+def write_profile_result(collisions, hot_q_ratio=0.5):
     fname = './qr_profiles_%d.txt' %collisions
     with open(fname ,'w') as f:
         total_access_list = []
@@ -198,10 +198,10 @@ def write_trace_file(
     ):
 
     embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % collisions
-    total_data = len(train_data)
     default_vec_size = 64
     total_burst = vec_size // default_vec_size
     embedding_profiles = load_profile_result(called_inside_dlrm, embedding_profile_savefile)
+    total_data = len(train_data)
 
     if using_bg_map:
         addr_mapper = BGAddressTranslation(embedding_profiles, collisions=collisions, vec_size=vec_size)
@@ -254,19 +254,51 @@ def write_trace_file(
 
 if __name__ == "__main__":
     profiles = None
+    draw_graph = True
+    write_trace = False
     collisions = [4, 8, 16]
     vec_sizes = [64, 128, 256, 512]
-    train_data_savefile = './savedata/train_data.pickle'
-    train_data = load_train_data(train_data_savefile)
 
-    for col in collisions:
-        for vec_size in vec_sizes:
-            print(f"Processing col={col}, vec_size={vec_size}")
+    if draw_graph:
+        cumulative_q_access_list = []
+        r_access_list = []
+        for col in collisions:
             embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % col
-            write_trace_file(called_inside_dlrm=False, 
-                            embedding_profile_savefile=embedding_profile_savefile, 
-                            train_data=train_data,
-                            collisions=col,
-                            vec_size=vec_size,
-                            using_bg_map=False
-                            )
+            embedding_profiles = load_profile_result(False, embedding_profile_savefile)            
+            for i, prof_per_table in enumerate(embedding_profiles):
+                hot_q_idx, hot_q_hit_ratio, frozen_q, r_in_q, hot_vectors, total_access = process_profile_data(prof_per_table, 0.3)
+                print(i)
+                cumulative_access = [0]
+                if prof_per_table.shape[0] == 1:                    
+                    continue
+                    cumulative_q_access_list.append(cumulative_access)
+                    r_access_list.append(np.array([]))
+                for idx in hot_q_idx:
+                    cumulative_access.append(cumulative_access[-1] + np.sum(prof_per_table[idx]))
+                cumulative_access = np.array(cumulative_access)
+                cumulative_access = cumulative_access / total_access
+                cumulative_q_access_list.append(cumulative_access)
+                r_access_list.append(prof_per_table[idx])
+
+            q_dumpfile = './profile_q_access_%d.pickle' % col
+            with open(q_dumpfile, 'wb') as wf:
+                pickle.dump(cumulative_q_access_list, wf)
+
+            r_dumpfile = './profile_r_access_%d.pickle' % col
+            with open(r_dumpfile, 'wb') as wf:
+                pickle.dump(r_access_list, wf)
+
+    elif write_trace:
+        train_data_savefile = './savedata/train_data.pickle'
+        train_data = load_train_data(train_data_savefile)
+        for col in collisions:
+            for vec_size in vec_sizes:
+                print(f"Processing col={col}, vec_size={vec_size}")
+                embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % col
+                write_trace_file(called_inside_dlrm=False, 
+                                embedding_profile_savefile=embedding_profile_savefile, 
+                                train_data=train_data,
+                                collisions=col,
+                                vec_size=vec_size,
+                                using_bg_map=False
+                                )
