@@ -14,6 +14,7 @@ from multiprocessing import Process, Manager
 # import collections as coll
 
 import numpy as np
+import pickle
 
 
 def convertUStringToDistinctIntsDict(mat, convertDicts, counts):
@@ -95,7 +96,18 @@ def processCriteoAdData(d_path, d_file, npzfile, i, convertDicts, pre_comp_count
         print("Using existing " + filename_i, end="\n")
     else:
         print("Not existing " + filename_i)
+
+        # yskim
+        if len(convertDicts[0]) == 0:
+            print('start processing convertDicts...')
+            with np.load(npzfile + "_{0}.npz".format(i)) as data:
+                X_cat = np.transpose(data["X_cat_t"])
+                for k in range(X_cat.shape[0]):
+                    for j in range(26):
+                        convertDicts[j][X_cat[k][j]] = 1
         with np.load(npzfile + "_{0}.npz".format(i)) as data:
+            print('start processing npzfiles...')
+
             # categorical features
             '''
             # Approach 1a: using empty dictionaries
@@ -916,19 +928,47 @@ def getCriteoAdData(
             # Each line in the file is a sample, consisting of 13 continuous and
             # 26 categorical features (an extra space indicates that feature is
             # missing and will be interpreted as 0).
-            for i in range(days):
-                datafile_i = datafile + "_" + str(i)  # + ".gz"
-                if path.exists(str(datafile_i)):
-                    print("Reading data from path=%s" % (str(datafile_i)))
-                    # file day_<number>
-                    total_per_file_count = 0
-                    with open(str(datafile_i)) as f:
-                        for _ in f:
-                            total_per_file_count += 1
-                    total_per_file.append(total_per_file_count)
-                    total_count += total_per_file_count
-                else:
-                    sys.exit("ERROR: Criteo Terabyte Dataset path is invalid; please download from https://labs.criteo.com/2013/12/download-terabyte-click-logs")
+            # for i in range(days):
+            #     datafile_i = datafile + "_" + str(i)  # + ".gz"
+            #     if path.exists(str(datafile_i)):
+            #         print("Reading data from path=%s" % (str(datafile_i)))
+            #         # file day_<number>
+            #         total_per_file_count = 0
+            #         with open(str(datafile_i)) as f:
+            #             for _ in f:
+            #                 total_per_file_count += 1
+            #         total_per_file.append(total_per_file_count)
+            #         total_count += total_per_file_count
+            #     else:
+            #         sys.exit("ERROR: Criteo Terabyte Dataset path is invalid; please download from https://labs.criteo.com/2013/12/download-terabyte-click-logs")
+
+            # Check if the total_per_file has been saved previously
+            # yskim
+            if path.exists("total_per_file.pkl"):
+                with open("total_per_file.pkl", "rb") as file:
+                    total_per_file = pickle.load(file)
+                total_count = sum(total_per_file)
+                print("Loaded total_per_file from saved file.")
+            else:
+                for i in range(days):
+                    datafile_i = datafile + "_" + str(i)  # + ".gz"
+                    if path.exists(str(datafile_i)):
+                        print("Reading data from path=%s" % (str(datafile_i)))
+                        total_per_file_count = 0
+                        with open(str(datafile_i)) as f:
+                            for _ in f:
+                                total_per_file_count += 1
+                        total_per_file.append(total_per_file_count)
+                        total_count += total_per_file_count
+                    else:
+                        sys.exit("ERROR: Criteo Terabyte Dataset path is invalid; please download from https://labs.criteo.com/2013/12/download-terabyte-click-logs")
+
+                # Save total_per_file to a file
+                with open("total_per_file.pkl", "wb") as file:
+                    pickle.dump(total_per_file, file)
+                print("Saved total_per_file to file.")
+
+
 
     # process a file worth of data and reinitialize data
     # note that a file main contain a single or multiple splits
@@ -943,106 +983,110 @@ def getCriteoAdData(
     ):
         if dataset_multiprocessing:
             convertDicts_day = [{} for _ in range(26)]
+        filename_npz = npzfile + "_{0}.npz".format(split)
 
-        with open(str(datfile)) as f:
-            y = np.zeros(num_data_in_split, dtype="i4")  # 4 byte int
-            X_int = np.zeros((num_data_in_split, 13), dtype="i4")  # 4 byte int
-            X_cat = np.zeros((num_data_in_split, 26), dtype="i4")  # 4 byte int
-            if sub_sample_rate == 0.0:
-                rand_u = 1.0
-            else:
-                rand_u = np.random.uniform(low=0.0, high=1.0, size=num_data_in_split)
+        # yskim
+        if not path.exists(filename_npz):
 
-            i = 0
-            percent = 0
-            for k, line in enumerate(f):
-                # process a line (data point)
-                line = line.split('\t')
-                # set missing values to zero
-                for j in range(len(line)):
-                    if (line[j] == '') or (line[j] == '\n'):
-                        line[j] = '0'
-                # sub-sample data by dropping zero targets, if needed
-                target = np.int32(line[0])
-                if target == 0 and \
-                   (rand_u if sub_sample_rate == 0.0 else rand_u[k]) < sub_sample_rate:
-                    continue
-
-                y[i] = target
-                X_int[i] = np.array(line[1:14], dtype=np.int32)
-                if max_ind_range > 0:
-                    X_cat[i] = np.array(
-                        list(map(lambda x: int(x, 16) % max_ind_range, line[14:])),
-                        dtype=np.int32
-                    )
+            with open(str(datfile)) as f:
+                y = np.zeros(num_data_in_split, dtype="i4")  # 4 byte int
+                X_int = np.zeros((num_data_in_split, 13), dtype="i4")  # 4 byte int
+                X_cat = np.zeros((num_data_in_split, 26), dtype="i4")  # 4 byte int
+                if sub_sample_rate == 0.0:
+                    rand_u = 1.0
                 else:
-                    X_cat[i] = np.array(
-                        list(map(lambda x: int(x, 16), line[14:])),
-                        dtype=np.int32
-                    )
+                    rand_u = np.random.uniform(low=0.0, high=1.0, size=num_data_in_split)
 
-                # count uniques
-                if dataset_multiprocessing:
-                    for j in range(26):
-                        convertDicts_day[j][X_cat[i][j]] = 1
-                    # debug prints
-                    if float(i)/num_data_in_split*100 > percent+1:
-                        percent = int(float(i)/num_data_in_split*100)
+                i = 0
+                percent = 0
+                for k, line in enumerate(f):
+                    # process a line (data point)
+                    line = line.split('\t')
+                    # set missing values to zero
+                    for j in range(len(line)):
+                        if (line[j] == '') or (line[j] == '\n'):
+                            line[j] = '0'
+                    # sub-sample data by dropping zero targets, if needed
+                    target = np.int32(line[0])
+                    if target == 0 and \
+                    (rand_u if sub_sample_rate == 0.0 else rand_u[k]) < sub_sample_rate:
+                        continue
+
+                    y[i] = target
+                    X_int[i] = np.array(line[1:14], dtype=np.int32)
+                    if max_ind_range > 0:
+                        X_cat[i] = np.array(
+                            list(map(lambda x: int(x, 16) % max_ind_range, line[14:])),
+                            dtype=np.int32
+                        )
+                    else:
+                        X_cat[i] = np.array(
+                            list(map(lambda x: int(x, 16), line[14:])),
+                            dtype=np.int32
+                        )
+
+                    # count uniques
+                    if dataset_multiprocessing:
+                        for j in range(26):
+                            convertDicts_day[j][X_cat[i][j]] = 1
+                        # debug prints
+                        if float(i)/num_data_in_split*100 > percent+1:
+                            percent = int(float(i)/num_data_in_split*100)
+                            print(
+                                "Load %d/%d (%d%%) Split: %d  Label True: %d  Stored: %d"
+                                % (
+                                    i,
+                                    num_data_in_split,
+                                    percent,
+                                    split,
+                                    target,
+                                    y[i],
+                                ),
+                                end="\n",
+                            )
+                    else:
+                        for j in range(26):
+                            convertDicts[j][X_cat[i][j]] = 1
+                        # debug prints
                         print(
-                            "Load %d/%d (%d%%) Split: %d  Label True: %d  Stored: %d"
+                            "Load %d/%d  Split: %d  Label True: %d  Stored: %d"
                             % (
                                 i,
                                 num_data_in_split,
-                                percent,
                                 split,
                                 target,
                                 y[i],
                             ),
-                            end="\n",
+                            end="\r",
                         )
+                    i += 1
+
+                # store num_data_in_split samples or extras at the end of file
+                # count uniques
+                # X_cat_t  = np.transpose(X_cat)
+                # for j in range(26):
+                #     for x in X_cat_t[j,:]:
+                #         convertDicts[j][x] = 1
+                # store parsed
+                filename_s = npzfile + "_{0}.npz".format(split)
+                if path.exists(filename_s):
+                    print("\nSkip existing " + filename_s)
                 else:
-                    for j in range(26):
-                        convertDicts[j][X_cat[i][j]] = 1
-                    # debug prints
-                    print(
-                        "Load %d/%d  Split: %d  Label True: %d  Stored: %d"
-                        % (
-                            i,
-                            num_data_in_split,
-                            split,
-                            target,
-                            y[i],
-                        ),
-                        end="\r",
+                    np.savez_compressed(
+                        filename_s,
+                        X_int=X_int[0:i, :],
+                        # X_cat=X_cat[0:i, :],
+                        X_cat_t=np.transpose(X_cat[0:i, :]),  # transpose of the data
+                        y=y[0:i],
                     )
-                i += 1
+                    print("\nSaved " + npzfile + "_{0}.npz!".format(split))
 
-            # store num_data_in_split samples or extras at the end of file
-            # count uniques
-            # X_cat_t  = np.transpose(X_cat)
-            # for j in range(26):
-            #     for x in X_cat_t[j,:]:
-            #         convertDicts[j][x] = 1
-            # store parsed
-            filename_s = npzfile + "_{0}.npz".format(split)
-            if path.exists(filename_s):
-                print("\nSkip existing " + filename_s)
+            if dataset_multiprocessing:
+                resultDay[split] = i
+                convertDictsDay[split] = convertDicts_day
+                return
             else:
-                np.savez_compressed(
-                    filename_s,
-                    X_int=X_int[0:i, :],
-                    # X_cat=X_cat[0:i, :],
-                    X_cat_t=np.transpose(X_cat[0:i, :]),  # transpose of the data
-                    y=y[0:i],
-                )
-                print("\nSaved " + npzfile + "_{0}.npz!".format(split))
-
-        if dataset_multiprocessing:
-            resultDay[split] = i
-            convertDictsDay[split] = convertDicts_day
-            return
-        else:
-            return i
+                return i
 
     # create all splits (reuse existing files if possible)
     recreate_flag = False
@@ -1060,7 +1104,7 @@ def getCriteoAdData(
         else:
             recreate_flag = True
 
-    if recreate_flag:
+    if True:
         if dataset_multiprocessing:
             resultDay = Manager().dict()
             convertDictsDay = Manager().dict()
@@ -1105,7 +1149,11 @@ def getCriteoAdData(
 
     # dictionary files
     counts = np.zeros(26, dtype=np.int32)
-    if recreate_flag:
+
+    # yskim
+    create_dict_npz = True
+    print(convertDicts)
+    if recreate_flag or create_dict_npz:
         # create dictionaries
         for j in range(26):
             for i, x in enumerate(convertDicts[j]):
@@ -1151,6 +1199,7 @@ def getCriteoAdData(
 
     else:
         for i in range(days):
+            print(f'start processing day {i}')
             processCriteoAdData(d_path, d_file, npzfile, i, convertDicts, counts)
 
     o_file = concatCriteoAdData(

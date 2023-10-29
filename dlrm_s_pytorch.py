@@ -1809,8 +1809,8 @@ def run():
                 use_gpu,
             )
 
-    myprofiler.write_profile_result(args.qr_collisions)
-    myprofiler.write_trace_file(args.qr_collisions)
+    # myprofiler.write_profile_result(args.qr_collisions)
+    myprofiler.save_profile_result(collisions=args.qr_collisions)
 
     # profiling
     if args.enable_profiling:
