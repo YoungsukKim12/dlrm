@@ -18,16 +18,13 @@ class TRiM_Address_mapping():
         self.hot_vec_loc = self.hot_table_idx()
         if not os.path.exists("profile_collisions_{}_kbits_{}".format(self.collisions, k_bits)):
             self.vec_addr = self.TRiM_address_mapping()
-            np.save("profile_collisions_{}_kbits_{}".format(self.collisions, self.cache_size, k_bits), self.vec_addr)
+            np.save("profile_collisions_{}_kbits_{}".format(self.collisions, k_bits), self.vec_addr)
     def hot_table_idx(self):
         cache_vec_num = self.cache_vec_num 
         q_access = [np.sum(q_tables, axis=1).tolist() for q_tables in self.embedding_profiles]
         q_idx = np.array([[i, vec]  for i, table in enumerate(self.embedding_profiles) for vec in range(len(table))])
         q_argsort = np.argsort(np.concatenate(q_access))[::-1]
         self.hot_len = min(cache_vec_num, sum(self.r_vec_len) + len(q_argsort))
-        print(cache_vec_num)
-        print(sum(self.r_vec_len))
-        print(len(q_argsort))
         if cache_vec_num - sum(self.r_vec_len) > 0:
             q_hot_idx = q_idx[q_argsort[:min((cache_vec_num - sum(self.r_vec_len), len(q_argsort)))]]
             q_sort_table = q_hot_idx[np.argsort(q_hot_idx[:,0])]
@@ -55,10 +52,9 @@ class TRiM_Address_mapping():
                 return pickle.load(wf)
     def write_trace_file(self, savefile= "./test_profile_collisions_{}_kbits_{}"):
         savefile = savefile.format(self.collisions, self.addr_bits["k"])
-        if not os.path.exists(savefile):
-            with open(savefile, 'w') as wf:
-                for w in self.vec_addr:
-                    wf.write(" ".join(w)+"\n")
+        with open(savefile, 'w') as wf:
+            for w in self.vec_addr:
+                wf.write(" ".join(w)+"\n")
 
                
     def TRiM_address_mapping(self):
@@ -67,14 +63,14 @@ class TRiM_Address_mapping():
         cold_addr_acc = 0
         hot_addr_acc = sum(self.r_vec_len) * self.vec_size
         bg_cnt = 0
-        print(self.hot_len)
+        
         check_idx = []
         rank_bits = 2**(sum(list(self.addr_bits.values()))- self.addr_bits["rank"])
         vec_addr = [["hot","{}".format(self.vec_size*(sum(self.r_vec_len[:i])+vec)), "r","{}".format(i), "{}".format(vec)]  for i in range(len(self.embedding_profiles)) for vec in range(self.r_vec_len[i])]
         for i, emb_table in enumerate(self.embedding_profiles):
             for vec in tqdm(range(len(emb_table))):
                 if vec in self.hot_vec_loc[i]:
-                    vec_addr.append(["hot", "{}".format(hot_addr_acc), "q","{}".format(i),"{}".format(vec)])
+                    vec_addr.append(["hot","{}".format(hot_addr_acc), "q","{}".format(i),"{}".format(vec)])
                     hot_addr_acc += self.vec_size
                 else:
                     if cold_addr_acc % max_k_bits == 0:
@@ -84,10 +80,11 @@ class TRiM_Address_mapping():
                         elif cold_addr_acc % rank_bits == 0:
                             bg_cnt = 1
                             cold_addr_acc += self.vec_size * self.hot_len
+                        else:
+                            cold_addr_acc += self.vec_size   
                     else:
                         cold_addr_acc += self.vec_size
-                        #print(cold_addr_acc)
-                    vec_addr.append(["cold", "{}".format(cold_addr_acc), "q","{}".format(i),"{}".format(vec)])
+                    vec_addr.append(["cold","{}".format(cold_addr_acc), "q","{}".format(i),"{}".format(vec)])
         return vec_addr
-TRiM_mapping = TRiM_Address_mapping(k_bits=16, collisions=16)
+TRiM_mapping = TRiM_Address_mapping(k_bits=18, collisions=8)
 TRiM_mapping.write_trace_file()  
