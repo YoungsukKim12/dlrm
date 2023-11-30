@@ -278,6 +278,7 @@ class DLRM_Net(nn.Module):
                 EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
                 # initialize embeddings
                 # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
+                print(n)
                 W = np.random.uniform(
                     low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
                 ).astype(np.float32)
@@ -1121,12 +1122,14 @@ def run():
         mlperf_logger.barrier()
 
     if args.data_generation == "dataset":
+        print("dataset load start")
         train_data, train_ld, test_data, test_ld = dp.make_criteo_data_and_loaders(args)
         table_feature_map = {idx: idx for idx in range(len(train_data.counts))}
         nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
         nbatches_test = len(test_ld)
-
+        print("dataset load complete")
         ln_emb = train_data.counts
+        print("total train data : ", train_data.counts)
         # enforce maximum limit on number of vectors per embedding
         if args.max_ind_range > 0:
             ln_emb = np.array(
@@ -1560,6 +1563,11 @@ def run():
 
                 # train loop
                 for j, inputBatch in enumerate(train_ld):
+
+                    #yskim
+                    if j > 100000:
+                        break
+
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
 
@@ -1809,8 +1817,11 @@ def run():
                 use_gpu,
             )
 
-    # myprofiler.write_profile_result(args.qr_collisions)
-    myprofiler.save_profile_result(collisions=args.qr_collisions)
+    # myprofiler.write_profile_result(train_data=train_data, collisions=args.qr_collisions, called_inside_DLRM=True)
+    # myprofiler.save_profile_result(collision=args.qr_collisions)
+    for vec_size in [64, 128, 256, 512]:
+        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True)
+
 
     # profiling
     if args.enable_profiling:

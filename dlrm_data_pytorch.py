@@ -73,6 +73,8 @@ class CriteoDataset(Dataset):
         elif dataset == "terabyte":
             days = 24
             out_file = "terabyte_processed"
+            print("loading Terabyte Dataset...")
+            print("preprocessed dataset : ", pro_data)
         else:
             raise(ValueError("Data set option is not supported"))
         self.max_ind_range = max_ind_range
@@ -104,6 +106,7 @@ class CriteoDataset(Dataset):
         # WARNNING: when memory mapping is used we get a collection of files
         if data_ready:
             print("Reading pre-processed data=%s" % (str(pro_data)))
+            print("does pre processed data exists? :", path.exists(pro_data))
             file = str(pro_data)
         else:
             print("Reading raw data=%s" % (str(raw_path)))
@@ -141,6 +144,7 @@ class CriteoDataset(Dataset):
                 self.day = days - 1
                 num_samples = self.offset_per_file[days] - \
                               self.offset_per_file[days - 1]
+                print("num samples : ", num_samples)
                 self.test_size = int(np.ceil(num_samples / 2.))
                 self.val_size = num_samples - self.test_size
             else:
@@ -184,6 +188,9 @@ class CriteoDataset(Dataset):
             # load unique counts
             with np.load(self.d_path + self.d_file + "_fea_count.npz") as data:
                 self.counts = data["counts"]
+                print("d path :", self.d_path, " d file :", self.d_file)
+                print(data)
+                print("counts : ", self.counts)
             self.m_den = den_fea  # X_int.shape[1]
             self.n_emb = len(self.counts)
             print("Sparse features= %d, Dense features= %d" % (self.n_emb, self.m_den))
@@ -199,6 +206,9 @@ class CriteoDataset(Dataset):
                     self.X_int = data["X_int"]  # continuous  feature
                     self.X_cat = data["X_cat"]  # categorical feature
                     self.y = data["y"]          # target
+                    print("len X_cat : ", len(self.X_cat))
+                    print("len X_int : ", len(self.X_int))
+                    print("len y : ", len(self.y))
 
         else:
             # load and preprocess data
@@ -271,7 +281,7 @@ class CriteoDataset(Dataset):
 
         if self.memory_map:
             if self.split == 'none' or self.split == 'train':
-                # check if need to swicth to next day and load data
+                # check if need to switch to next day and load data
                 if index == self.offset_per_file[self.day]:
                     # print("day_boundary switch", index)
                     self.day_boundary = self.offset_per_file[self.day]
@@ -314,6 +324,7 @@ class CriteoDataset(Dataset):
             if self.split == 'none':
                 return self.offset_per_file[-1]
             elif self.split == 'train':
+                print("train len : ", self.offset_per_file[-2])
                 return self.offset_per_file[-2]
             elif self.split == 'test':
                 return self.test_size
@@ -433,6 +444,8 @@ def make_criteo_data_and_loaders(args, offset_to_length_converter=False):
                                                 test_file,
                                                 counts_file]):
                 ensure_dataset_preprocessed(args, d_path)
+
+            print("loading Terabyte Dataset...")
 
             train_data = data_loader_terabyte.CriteoBinDataset(
                 data_file=train_file,

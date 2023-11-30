@@ -97,14 +97,6 @@ def processCriteoAdData(d_path, d_file, npzfile, i, convertDicts, pre_comp_count
     else:
         print("Not existing " + filename_i)
 
-        # yskim
-        if len(convertDicts[0]) == 0:
-            print('start processing convertDicts...')
-            with np.load(npzfile + "_{0}.npz".format(i)) as data:
-                X_cat = np.transpose(data["X_cat_t"])
-                for k in range(X_cat.shape[0]):
-                    for j in range(26):
-                        convertDicts[j][X_cat[k][j]] = 1
         with np.load(npzfile + "_{0}.npz".format(i)) as data:
             print('start processing npzfiles...')
 
@@ -567,6 +559,7 @@ def concatCriteoAdData(
             total_counter = [0] * days
             for i in range(days):
                 filename_i = npzfile + "_{0}_processed.npz".format(i)
+                print(filename_i)
                 with np.load(filename_i) as data:
                     X_cat = data["X_cat"]
                     X_int = data["X_int"]
@@ -1102,9 +1095,9 @@ def getCriteoAdData(
         elif path.exists(npzfile_p):
             print("Skip existing " + npzfile_p)
         else:
-            recreate_flag = True
+            recreate_flag = False
 
-    if True:
+    if recreate_flag:
         if dataset_multiprocessing:
             resultDay = Manager().dict()
             convertDictsDay = Manager().dict()
@@ -1150,9 +1143,22 @@ def getCriteoAdData(
     # dictionary files
     counts = np.zeros(26, dtype=np.int32)
 
+
     # yskim
-    create_dict_npz = True
-    print(convertDicts)
+    create_dict_npz = False
+
+    # yskim
+    if create_dict_npz:
+        for i in range(days):
+            print('Loading ConvertDicts...')
+            with np.load(npzfile + "_{0}.npz".format(i)) as data:
+                X_cat = np.transpose(data["X_cat_t"])
+                for k in range(X_cat.shape[0]):
+                    for j in range(26):
+                        convertDicts[j][X_cat[k][j]] = 1
+        print("ConvertDicts load complete")
+
+    # yskim
     if recreate_flag or create_dict_npz:
         # create dictionaries
         for j in range(26):
@@ -1172,6 +1178,7 @@ def getCriteoAdData(
     else:
         # create dictionaries (from existing files)
         for j in range(26):
+            print(d_path + d_file + "_fea_dict_{0}.npz".format(j))
             with np.load(d_path + d_file + "_fea_dict_{0}.npz".format(j)) as data:
                 unique = data["unique"]
             for i, x in enumerate(unique):
