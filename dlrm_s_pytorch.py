@@ -99,6 +99,7 @@ from tricks.qr_embedding_bag import QREmbeddingBag
 
 sys.path.insert(0, '..')
 import my_profiler as myprofiler
+import HEAM_utils as myutils
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -1564,9 +1565,10 @@ def run():
                 # train loop
                 for j, inputBatch in enumerate(train_ld):
 
-                    #yskim
-                    if j > 100000:
-                        break
+                    # yskim
+                    # if j > 4000 :
+                    #     print('escape!')
+                    #     break
 
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
@@ -1819,8 +1821,11 @@ def run():
 
     # myprofiler.write_profile_result(train_data=train_data, collisions=args.qr_collisions, called_inside_DLRM=True)
     # myprofiler.save_profile_result(collision=args.qr_collisions)
-    for vec_size in [64, 128, 256, 512]:
-        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True)
+    print('writing trace file initiated')
+    for vec_size in [128, 256, 512]:
+        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='Terabyte', merge_kaggle_and_terabyte=True, kaggle_duplicate_on_merge=4)
+
+    myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
 
 
     # profiling

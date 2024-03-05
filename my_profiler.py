@@ -25,7 +25,11 @@ class MyProfiler:
     def record_qr_profile(i, q, r):
         q = q.detach().cpu().numpy()
         r = r.detach().cpu().numpy()
+        # print(q.shape)
+        # print(MyProfiler.table_profiles[i][q,r])
         MyProfiler.table_profiles[i][q,r] += 1
+        # print(MyProfiler.table_profiles[i][q,r])
+        # print('next batch')
 
 def total_compressed_embs():
     tot_embs = 0
@@ -35,14 +39,16 @@ def total_compressed_embs():
         tot_embs += table.shape[1]
     return tot_embs
 
-def save_profile_result(collision):
-    savefile = './savedata/profile_collision_%d.pickle' % collision
+def save_profile_result(path, dataset, collision):
+    savefile = f'./{path}/{dataset}/profile_collision_{collision}.pickle'
     profiles = MyProfiler.table_profiles
     with open(savefile, 'wb') as sf:
         pickle.dump(profiles, sf)
 
-def load_profile_result(savefile):
+def load_profile_result(path, dataset, collision):
+    savefile = f'{path}/{dataset}/profile_collision_{collision}.pickle'
     profiles = None
+    print(savefile)
     if not os.path.exists(savefile):
         print('please run dlrm first!')
         sys.exit()
@@ -52,22 +58,40 @@ def load_profile_result(savefile):
 
     return profiles
 
-def load_train_data(train_data_savefile):
+def load_criteo_train_data(path='./savedata/', dataset='kaggle'):
     print('loading train data...')
+    train_data = None
+    train_data_savefile= os.path.join(path, dataset, "train_data.pickle")
     if not os.path.exists(train_data_savefile):
-        train_data = dp.CriteoDataset(
-            "kaggle",
-            -1,
-            0.0,
-            "total",
-            "train",
-            "./input/train.txt",
-            "./input/kaggleAdDisplayChallenge_processed.npz",
-            False,
-            False
-        )
+        print("read from kaggle")
+        if dataset == 'kaggle':
+            train_data = dp.CriteoDataset(
+                "kaggle",
+                -1,
+                0.0,
+                "total",
+                "train",
+                "./input/train.txt",
+                "./input/kaggleAdDisplayChallenge_processed.npz",
+                False,
+                False
+            )
+        else:
+            print("read from terabyte")
+            train_data = dp.CriteoDataset(
+                "terabyte",
+                10000000,
+                0.0,
+                "total",
+                "train",
+                "./terabyte_input/day",
+                "./terabyte_input/terabyte_processed.npz",
+                True,
+                False
+            )
         with open(train_data_savefile, 'wb') as savefile:
-            pickle.dump(train_data, savefile)
+                pickle.dump(train_data, savefile)
+        pass
     else:
         with open(train_data_savefile, 'rb') as loadfile:
             train_data = pickle.load(loadfile)
@@ -76,56 +100,109 @@ def load_train_data(train_data_savefile):
     return train_data
 
 
-def get_physical_address(addr_translator, using_bg_map, table_index, vec_index, is_r_vec=False):
-    in_HBM, emb_physical_addr = addr_translator.physical_address_translation(table_index, vec_index, is_r_vec)
+def get_physical_address(addr_translator, using_bg_map, table_index, vec_index, is_r_vec=False, collision_idx=0):
+    in_HBM, emb_physical_addr = addr_translator.physical_address_translation(table_index, vec_index, is_r_vec, collision_idx)
     return in_HBM, emb_physical_addr
 
 def write_trace_line(wf, device, physical_addr, vec_type, total_burst):
     for k in range(total_burst):
         wf.write(f"{device} {physical_addr+64*k} {vec_type} {k}\n")
 
+def merge_kaggle_and_terabyte_data(
+        train_data_path, 
+        collision,
+        terabyte_embedding_profiles,
+        kaggle_duplicate_on_merge=1,
+    ):
+
+    kaggle_train_data = load_criteo_train_data(train_data_path, dataset='kaggle')
+    kaggle_embedding_profiles = load_profile_result(path=train_data_path, dataset='kaggle', collision=collision)
+    merged_profile = [*terabyte_embedding_profiles]
+    for i in range(kaggle_duplicate_on_merge):
+        total_access = 0
+        print("kaggle profile len : ", len(kaggle_embedding_profiles))
+        for j, prof_per_table in enumerate(kaggle_embedding_profiles):
+            total_access += np.sum(prof_per_table)
+        for j, prof_per_table in enumerate(kaggle_embedding_profiles):
+            kaggle_embedding_profiles[j] = kaggle_embedding_profiles[j] / total_access / (kaggle_duplicate_on_merge+1)
+
+        merged_profile = [*merged_profile, *kaggle_embedding_profiles]
+    return kaggle_train_data, merged_profile
+
 def write_trace_file(
         embedding_profile_savefile='./profile.pickle', 
-        train_data=None, 
+        train_data=None,
         collisions=4, 
         vec_size=64,
         using_bg_map=False,
-        using_TRiM=False,
         called_inside_DLRM=False,
-        dataset='Kaggle'
+        dataset='kaggle',
+        merge_kaggle_and_terabyte=True,
+        kaggle_duplicate_on_merge=1
     ):
-    if called_inside_DLRM:
-        embedding_profiles = MyProfiler.table_profiles
-        save_profile_result(collisions)
-    else:
-        embedding_profiles = load_profile_result(embedding_profile_savefile)
+    train_data_path = './savedata'
+
+    print('writing trace file...')
+    # if called_inside_DLRM:
+    #     embedding_profiles = MyProfiler.table_profiles
+    #     save_profile_result(train_data_path, dataset, collisions)
+    # else:
+    embedding_profiles = load_profile_result(train_data_path, dataset, collisions)
+
+    total_access = 0
+    for i, prof_per_table in enumerate(embedding_profiles):
+        total_access += np.sum(prof_per_table)
+    for i, prof_per_table in enumerate(embedding_profiles):
+        embedding_profiles[i] = embedding_profiles[i] / total_access / (kaggle_duplicate_on_merge+1)
+    print("terabyte profile len : ", len(embedding_profiles))
+
+    if dataset == 'Terabyte' and merge_kaggle_and_terabyte:
+        print('merge two dataset')
+        kaggle_train_data, merged_profile = merge_kaggle_and_terabyte_data(
+                                                train_data_path=train_data_path,
+                                                collision=collisions,
+                                                terabyte_embedding_profiles=embedding_profiles,
+                                                kaggle_duplicate_on_merge=kaggle_duplicate_on_merge,
+                                            )
+        embedding_profiles = merged_profile
 
     default_vec_size = 64
     total_burst = vec_size // default_vec_size
     total_data = len(train_data)
 
     addr_mappers = []
-    # addr_mappers.append(BasicAddressTranslation(embedding_profiles, DIMM_size_gb=4, collisions=collisions, vec_size=vec_size))
-    # addr_mappers.append(RecNMPAddressTranslation(embedding_profiles, collisions=collisions, vec_size=vec_size)) # RecNMP
-    addr_mappers.append(TRiMAddressTranslation(embedding_profiles, collisions=collisions, bank_group_bits_naive=27)) # TRiM
-    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.8)) # SPACE
-    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.9, mapper_name="HEAM")) #HEAM
+
+    addr_mappers.append(BasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="Basic"))
+    addr_mappers.append(RecNMPAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="RecNMP")) # RecNMP
+    addr_mappers.append(TRiMAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, bank_group_bits_naive=29, vec_size=vec_size, mapper_name="TRiM")) # TRiM
+    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.833, r_load_balance=False, mapper_name="SPACE")) # SPACE
+    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=True, mapper_name="HEAM")) #HEAM
 
     for addr_mapper in addr_mappers:
         mapper_name = addr_mapper.mapper_name()
-        writefile = f'./traces/{dataset}_{(mapper_name)}_trace_col_{collisions}_vecsize_{vec_size}.txt'
+        writefile = f'./{dataset}_{(mapper_name)}_trace_col_{collisions}_vecsize_{vec_size}.txt'
+        if merge_kaggle_and_terabyte:
+            writefile = f'./{dataset}_{(mapper_name)}_trace_col_{collisions}_vecsize_{vec_size}_merge_count_{kaggle_duplicate_on_merge}.txt'
+
         print("writing : ", writefile)
         with open(writefile, 'w') as wf:
             for i, data in enumerate(train_data):
-                if i % 4096 == 0:
+                if i % 1000 == 0:
                     print(f"{i}/{total_data} trace processed")
                 if i > 20000:
                     print('done writing tracing file')
                     break
 
                 _, feat, _ = data
+                if merge_kaggle_and_terabyte:
+                    for i in range(kaggle_duplicate_on_merge):
+                        _, kaggle_feat, _ = kaggle_train_data[random.randint(0, len(kaggle_train_data))]
+                        feat = [*feat, *kaggle_feat]
+                        # print(len(feat))
+
                 for table, emb in enumerate(feat):
                     q_emb = emb // collisions
+                    r_emb = emb % collisions
 
                     # write q vector
                     in_HBM, emb_physical_addr = get_physical_address(
@@ -133,7 +210,8 @@ def write_trace_file(
                                                     using_bg_map=using_bg_map, 
                                                     table_index=table, 
                                                     vec_index=q_emb,
-                                                    is_r_vec=False
+                                                    is_r_vec=False,
+                                                    collision_idx=r_emb
                                                 )
                     if mapper_name == "Basic":
                         device = "DIMM"
@@ -151,7 +229,12 @@ def write_trace_file(
                         if addr_mapper.is_hot_vector(table, q_emb):
                             vec_type = 'h'
                         write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
-                    elif mapper_name == "HeteroBasic":
+                    elif mapper_name == "HeteroBasic" or mapper_name == "HEAM":
+                        device = "HBM" if in_HBM else "DIMM"
+                        q_written_device = device
+                        vec_type = "q" if collisions > 1 else "o"
+                        write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
+                    elif mapper_name == "SPACE":
                         device = "HBM" if in_HBM else "DIMM"
                         q_written_device = device
                         vec_type = "q" if collisions > 1 else "o"
@@ -159,7 +242,6 @@ def write_trace_file(
 
                     # write r vector                
                     if collisions > 1:
-                        r_emb = emb % collisions
                         in_HBM, emb_physical_addr = get_physical_address(
                                                         addr_translator=addr_mapper, 
                                                         using_bg_map=using_bg_map, 
@@ -179,8 +261,14 @@ def write_trace_file(
                             device = "DIMM"
                             vec_type = "h"
                             write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
-                        elif mapper_name == "HeteroBasic":
-                            if q_written_device == "HBM":
+                        elif mapper_name == "HeteroBasic" or mapper_name == "HEAM":
+                            # if q_written_device == "HBM":
+                            device = "HBM"
+                            vec_type = "r"
+                            write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
+                        elif mapper_name == "SPACE":
+                            # apply reduction locality to vectors in HBM. (do not add r trace for vector access in HBM) - This is for mildly applying reduction locality for convenience
+                            if q_written_device == "DIMM":
                                 device = "HBM"
                                 vec_type = "r"
                                 write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
@@ -189,14 +277,14 @@ def write_trace_file(
 
 
 if __name__ == "__main__":
-    profiles = None
-    collisions = [1]
-    vec_sizes = [64, 128, 256, 512]
+    collisions = [8]
+    vec_sizes = [64]
+    dataset='kaggle'
 
-    train_data_savefile = './savedata/train_data.pickle'
-    train_data = load_train_data(train_data_savefile)
+    train_data = load_criteo_train_data('./savedata', dataset=dataset)
+
     for col in collisions:
-        embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % col
+        embedding_profile_savefile = f'./savedata/{dataset}/profile_collision_{col}.pickle'
         for vec_size in vec_sizes:
             print(f"Processing col={col}, vec_size={vec_size}")
             write_trace_file(embedding_profile_savefile=embedding_profile_savefile, 
@@ -204,54 +292,9 @@ if __name__ == "__main__":
                             collisions=col,
                             vec_size=vec_size,
                             using_bg_map=False,
-                            dataset='kaggle'
+                            dataset=dataset,
+                            merge_kaggle_and_terabyte=False,
+                            kaggle_duplicate_on_merge=0
                             )
 
-    # convertDicts = [{} for _ in range(26)]  # Initialize empty dictionaries for each categorical feature
-    # npzfile = "./terabyte_input/day"
-    # counts = np.zeros(26, dtype=np.int32)
-    # for i in range(24):
-    #     print(f'Loading day {i} data from {npzfile}_{i}.npz...')
-    #     with np.load(f'./terabyte_input/day_{i}.npz') as data:
-    #         # Assuming X_cat_t is the transposed categorical data
-    #         X_cat_t = data["X_cat_t"]
-    #         for j in range(26):  # Iterate over each categorical feature
-    #             unique_values = np.unique(X_cat_t[j, :])  # Find unique values for each feature
-    #             for value in unique_values:
-    #                 convertDicts[j][value] = 1  # Update convertDicts
-
-    #     # Convert indices in convertDicts to sequential numbers
-    #     for j in range(26):
-    #         unique_values = list(convertDicts[j].keys())
-    #         convertDicts[j] = {old: new for new, old in enumerate(unique_values)}
-    #         counts[j] = len(convertDict[j])
-
-    # dict_file_j = d_path + d_file + "_fea_dict_{0}_tmp.npz".format(j)
-    # if not path.exists(dict_file_j):
-    #     np.savez_compressed(
-    #         dict_file_j,
-    #         unique=np.array(list(convertDicts[j]), dtype=np.int32)
-    #     )
-    # print("Saved convertDicts to file.")
-
-
-    # convertDicts = [{} for _ in range(26)]
-    # counts = np.zeros(26, dtype=np.int32)
-
-    # for i in range(24):
-    #     print("processing ", i)
-    #     with np.load("./terabyte_input/day_{0}_processed.npz".format(i)) as f:
-    #         X_cat = f["X_cat"]
-    #     print(X_cat.shape[0])
-    #     for k in range(X_cat.shape[0]):
-    #         for j in range(26):
-    #             print(X_cat[k][j])
-    #             convertDicts[j][X_cat[k][j]] = 1
-    #     for j in range(26):
-    #         for m, x in enumerate(convertDicts[j]):
-    #             convertDicts[j][x] = m
-    #         counts[j] = len(convertDicts[j])
-    #     print(counts)
-
-    # count_file = "./terabyte_input/day_fea_count.npz"
-    # np.savez_compressed(count_file, counts=counts)
+    # myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)

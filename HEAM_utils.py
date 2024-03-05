@@ -2,6 +2,7 @@ import numpy as np
 import my_profiler as prof
 from address_translation import BasicAddressTranslation
 import os 
+import random
 
 class CacheBlock:
     def __init__(self, tag):
@@ -69,6 +70,7 @@ class Cache:
         total_hits = sum(self.hits.values())
         total_misses = sum(self.misses.values())
         total_accesses = total_hits + total_misses
+
         return total_hits / total_accesses if total_accesses > 0 else 0
 
 def CacheSimulator(train_data=None, collision=4, vec_size=64, Cache_MB=1, Block_size=64):
@@ -79,8 +81,7 @@ def CacheSimulator(train_data=None, collision=4, vec_size=64, Cache_MB=1, Block_
     cache = Cache(CACHE_SIZE, BLOCK_SIZE, ASSOCIATIVITY)
     total_burst = vec_size // 64
 
-    embedding_profile_savefile = './savedata/profile_collision_%d.pickle' % collision
-    embedding_profiles = prof.load_profile_result(embedding_profile_savefile)
+    embedding_profiles = prof.load_profile_result('./savedata', 'Terabyte', collision)
     translator = BasicAddressTranslation(embedding_profiles, collisions=collision, vec_size=vec_size)
     total_data = len(train_data)
 
@@ -119,31 +120,68 @@ def CacheSimulator(train_data=None, collision=4, vec_size=64, Cache_MB=1, Block_
     print(f"R hitrate : {r_hitrate}")
     print(f"Total hitrate : {total_hitrate}")
 
-def RunCacheSimulation():
-    train_data_savefile = './savedata/train_data.pickle'
-    train_data = prof.load_train_data(train_data_savefile)
+def RunCacheSimulation(called_inside_DLRM=False, train_data=None, collision=8, dataset='kaggle'):
+    if not called_inside_DLRM:
+        if dataset=='kaggle':
+            train_data_savefile = './savedata/train_data.pickle'
+            train_data = prof.load_train_data(train_data_savefile)
+        else:
+            print('using terabyte dataset for cache simulation... train_data should have been passed by parameter...')
+          
 
-    # print("Temporal Locality Simulation")
-    # for vec_size in [64, 128, 256, 512]:
-    #     for cache_size in [1, 2, 4, 8]:
-    #         CacheSimulator(
-    #             train_data=train_data,
-    #             collision=32,
-    #             vec_size=vec_size,
-    #             Cache_MB=cache_size,
-    #             Block_size=64
-    #         )
-
-    print("Spatial Locality Simulation")
-    for vec_size in [256, 512]:
-        for cache_block_size in [256, 512, 1024]:
+    print("Temporal Locality Simulation")
+    for vec_size in [64, 128, 256, 512]:
+        for cache_size in [1, 2, 4, 8]:
             CacheSimulator(
                 train_data=train_data,
-                collision=8,
+                collision=collision,
+                vec_size=vec_size,
+                Cache_MB=cache_size,
+                Block_size=64
+            )
+
+    print("Spatial Locality Simulation")
+    for vec_size in [64, 128, 256, 512]:
+        for cache_block_size in [64, 128, 256, 512, 1024]:
+            CacheSimulator(
+                train_data=train_data,
+                collision=collision,
                 vec_size=vec_size,
                 Cache_MB=1,
                 Block_size=cache_block_size
             )
+
+def get_random_trace(block_size=64, collision=8):
+    GB_TO_BYTES = 1024 * 1024 * 1024
+    TOTAL_SIZE_BYTES = 0.01 * GB_TO_BYTES #// collision
+    BLOCK_SIZE_BYTES = block_size
+
+    total_blocks = TOTAL_SIZE_BYTES // BLOCK_SIZE_BYTES
+    random_block = random.randint(0, total_blocks - 1)
+    random_address = random_block * BLOCK_SIZE_BYTES
+
+    return random_address
+
+def RunRandomCacheSimulation(train_data=None, collision=8, vec_size=64, Cache_MB=1, Block_size=64):
+    CACHE_SIZE = Cache_MB * 2**20  # in bytes
+    BLOCK_SIZE = Block_size  # in bytes
+    ASSOCIATIVITY = 4
+    cache = Cache(CACHE_SIZE, BLOCK_SIZE, ASSOCIATIVITY)
+    total_burst = vec_size // 64
+    total_iterations = 100000*26
+
+    for i in range(total_iterations):
+        q_pa = get_random_trace(Block_size)
+        for j in range(total_burst):
+            cache.access(q_pa + 64*j, 'q')
+
+    q_hitrate = round(cache.category_hit_rate('q'),3)
+    total_hitrate = round(cache.overall_hit_rate(),3)
+
+    print(f"\nRandom Cache Simulation on {Cache_MB}MB Cache / {Block_size}B block / Vector {vec_size}B / collision {collision}\n")
+    print(f"Q hitrate : {q_hitrate}")
+    print(f"Total hitrate : {total_hitrate}")
+
 
 
 def convertDictGenerator():
@@ -178,10 +216,17 @@ def convertDictGenerator():
         np.savez_compressed(count_file, counts=counts)
 
 
+
+
+
 if __name__ == "__main__":
+    RunRandomCacheSimulation(Cache_MB=1)
+    RunRandomCacheSimulation(Cache_MB=2)
+    RunRandomCacheSimulation(Cache_MB=4)
+    RunRandomCacheSimulation(Cache_MB=8)
 
-    RunCacheSimulation()
+    # RunCacheSimulation()
 
 
-    if not path.exists(total_file):
-        np.savez_compressed(total_file, total_per_file=total_per_file)
+    # if not path.exists(total_file):
+    #     np.savez_compressed(total_file, total_per_file=total_per_file)
