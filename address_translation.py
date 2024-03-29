@@ -57,6 +57,8 @@ class AddressTranslation():
                 hot_vecs = [hot_q_ranking[curr_idx_per_table[table_id]] if not curr_idx_per_table[table_id] == -1 else -10 for table_id, hot_q_ranking in enumerate(hot_q_per_table)]
                 top_hot_vec_table_id = np.argmax(hot_vecs)
                 top_hot_vec_access_ratio = np.max(hot_vecs)
+                # jhlim temp
+                print("debugging: ", np.where(hot_indices_per_table[top_hot_vec_table_id] == curr_idx_per_table[top_hot_vec_table_id]))
                 top_hot_vec_idx_inside_table = np.where(hot_indices_per_table[top_hot_vec_table_id] == curr_idx_per_table[top_hot_vec_table_id])[0][0]
                 hot_vec_location[top_hot_vec_table_id].append(top_hot_vec_idx_inside_table)
                 curr_idx_per_table[top_hot_vec_table_id] += 1
