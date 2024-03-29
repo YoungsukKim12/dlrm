@@ -1566,9 +1566,9 @@ def run():
                 for j, inputBatch in enumerate(train_ld):
 
                     # yskim
-                    # if j > 4000 :
-                    #     print('escape!')
-                    #     break
+                    # if j > 1028 :
+                    #    print('escape!')
+                    #    break
 
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
@@ -1819,13 +1819,12 @@ def run():
                 use_gpu,
             )
 
-    # myprofiler.write_profile_result(train_data=train_data, collisions=args.qr_collisions, called_inside_DLRM=True)
-    # myprofiler.save_profile_result(collision=args.qr_collisions)
     print('writing trace file initiated')
     for vec_size in [128, 256, 512]:
-        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='Terabyte', merge_kaggle_and_terabyte=True, kaggle_duplicate_on_merge=4)
+        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='kaggle', merge_kaggle_and_terabyte=False, kaggle_duplicate_on_merge=4)
 
-    myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
+    # jhlim temp
+    # myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
 
 
     # profiling
