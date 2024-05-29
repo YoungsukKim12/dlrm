@@ -1823,9 +1823,9 @@ def run():
     # myprofiler.save_profile_result(collision=args.qr_collisions)
     print('writing trace file initiated')
     for vec_size in [128, 256, 512]:
-        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='Terabyte', merge_kaggle_and_terabyte=True, kaggle_duplicate_on_merge=4)
+        myprofiler.write_trace_file(train_data=train_data, collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='Terabyte', merge_kaggle_and_terabyte=False, kaggle_duplicate_on_merge=0)
 
-    myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
+    # myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
 
 
     # profiling

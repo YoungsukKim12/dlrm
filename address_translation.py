@@ -23,18 +23,22 @@ class AddressTranslation():
             hot vector index list is sorted for each table
         '''
 
+        print("start profiling hot vec location...")
+
         table_len = len(self.embedding_profiles)
         curr_idx_per_table = [0 for _ in range(table_len)]
         hot_vec_location = [[] for _ in range(table_len)]
 
-        # hot_vector_savefile = './hot_vector_location_profile_w_collision_%d.pickle' %self.collisions
+        hot_vector_savefile = './hot_vector_location_profile_w_collision_%d_%s.pickle' % (self.collisions, self.translator_name)
 
-        # if os.path.exists(hot_vector_savefile):
-        #     with open(hot_vector_savefile, 'rb') as loadfile:
-        #         hot_vec_location = pickle.load(loadfile)
+        if os.path.exists(hot_vector_savefile):
+            with open(hot_vector_savefile, 'rb') as loadfile:
+                hot_vec_location = pickle.load(loadfile)
+                return hot_vec_location
 
-        # else:
-        #     print("start calculating hot vector")
+        else:
+            print("start calculating hot vector")
+
         total_access = 0
         hot_q_per_table = []
         hot_indices_per_table = []
@@ -66,10 +70,14 @@ class AddressTranslation():
 
                 hot_vector_total_access -= top_hot_vec_access_ratio
 
+        for i in range(len(hot_vec_location)):
+            hot_vec_location[i] = np.sort(hot_vec_location[i])
+
         total_vector = 0
+        hot_vectors = 0
+
         for table in self.embedding_profiles:
             total_vector += len(table)
-        hot_vectors = 0
         for hot_vecs in hot_vec_location:
             hot_vectors += len(hot_vecs)
 
@@ -124,11 +132,27 @@ class BasicAddressTranslation(AddressTranslation):
         return DIMM_table_start_address
 
     def physical_address_translation(self, table_idx, vec_idx, is_r_vec, collision_idx=0):    
+
+        # table_start_logical_address = self.DIMM_table_start_address[table_idx]
+        # vec_logical_address = table_start_logical_address + vec_idx * self.vec_size
+        # vpn = int(vec_logical_address // self.page_offset)
+        # ppn = self.DIMM_page_translation[vpn]
+        # po_loc = vec_logical_address % self.page_offset
+
+        # physical_addr = int(ppn * self.page_offset + po_loc)
+
+
         table_start_logical_address = self.DIMM_table_start_address[table_idx]
-        table_start_vpn = int(table_start_logical_address // self.page_offset)
-        table_start_po = int(table_start_logical_address % self.page_offset)
-        ppn = self.DIMM_page_translation[table_start_vpn]
-        physical_addr = int(ppn * self.page_offset + table_start_po + vec_idx * self.vec_size)
+        if not is_r_vec:
+            vec_logical_address = table_start_logical_address + (self.collisions + vec_idx) * self.vec_size
+        else:
+            vec_logical_address = table_start_logical_address + vec_idx * self.vec_size
+
+        vpn = int(vec_logical_address // self.page_offset)
+        ppn = self.DIMM_page_translation[vpn]
+        po_loc = vec_logical_address % self.page_offset
+
+        physical_addr = int(ppn*self.page_offset + po_loc)
 
         return False, physical_addr
 
@@ -155,8 +179,6 @@ class HeteroBasicAddressTranslation(AddressTranslation):
         self.hot_vec_loc = self.profile_hot_vec_location()
         self.mapper_name_ = mapper_name
 
-        self.DIMM_table_start_address, self.HBM_table_start_address = self.basic_logical_address_translation(self.hot_vec_loc, self.embedding_profiles, self.vec_size, self.collisions)
-
         # DIMM size and ppns
         GB_size = math.pow(2, 30)
         HBM_Size = HBM_size_gb * GB_size
@@ -164,13 +186,14 @@ class HeteroBasicAddressTranslation(AddressTranslation):
         HBM_max_page_number = int(HBM_Size // self.page_offset)
         DIMM_max_page_number = int(DIMM_Size // self.page_offset)
         # for basic address mapping (use random vpn -> ppn mapping)
+        self.total_r_size = 0
         if self.r_load_balance:
-            # must be carefully calculated regarding address mapping
-            total_r_size = self.vec_size * self.collisions * len(embedding_profiles)
-            total_pages_for_r = int(total_r_size // self.page_offset)
-            self.HBM_page_translation = [i for i in range(total_pages_for_r, HBM_max_page_number)]
-        else:
-            self.HBM_page_translation = [i for i in range(HBM_max_page_number)]
+            self.total_r_size = self.vec_size * self.collisions * len(embedding_profiles)
+            self.pages_for_r = int(self.total_r_size // self.page_offset)
+
+        self.DIMM_table_start_address, self.HBM_table_start_address = self.basic_logical_address_translation(self.hot_vec_loc, self.embedding_profiles, self.vec_size, self.collisions)
+
+        self.HBM_page_translation = [i for i in range(HBM_max_page_number)]
         self.DIMM_page_translation = [i for i in range(DIMM_max_page_number)]
         random.shuffle(self.HBM_page_translation)
         random.shuffle(self.DIMM_page_translation)
@@ -180,7 +203,6 @@ class HeteroBasicAddressTranslation(AddressTranslation):
         HBM_space_per_table = [0 + vec_size * (collisions+len(hot_vec_loc[i])) for i in range(len(hot_vec_loc))]
         if self.mapper_name_ == "SPACE":
             HBM_space_per_table = [0 + vec_size * (collisions+len(hot_vec_loc[i])*collisions) for i in range(len(hot_vec_loc))]
-
         if self.r_load_balance:
             HBM_space_per_table = [0 + vec_size * (len(hot_vec_loc[i])) for i in range(len(hot_vec_loc))]
 
@@ -192,9 +214,12 @@ class HeteroBasicAddressTranslation(AddressTranslation):
             DIMM_accumulation += DIMM_space_per_table[i]
 
         HBM_accumulation = 0
+        if self.r_load_balance:
+            HBM_accumulation += self.total_r_size
         for i in range(len(HBM_space_per_table)):
             HBM_table_start_address.append(HBM_accumulation)
             HBM_accumulation += HBM_space_per_table[i]
+       
         print("total vectors stored in HBM in GB: ", HBM_accumulation/1024/1024/1024)
 
         return DIMM_table_start_address, HBM_table_start_address
@@ -205,34 +230,48 @@ class HeteroBasicAddressTranslation(AddressTranslation):
 
         # generate ppn
         if vec_idx in self.hot_vec_loc[table_idx] or is_r_vec:
-            table_start_logical_address = self.HBM_table_start_address[table_idx]
-            table_start_vpn = int(table_start_logical_address // self.page_offset)        
-            table_start_po = int(table_start_logical_address % self.page_offset)
-            ppn = self.HBM_page_translation[table_start_vpn]
-            # if self.r_load_balance and is is_r_vec:
-            #     ppn = (table_idx * collisions * self.vec_size + vec_idx * self.vec_size) // self.page_offset
+            table_start_logical_address = self.HBM_table_start_address[table_idx] # + int(self.HBM_table_start_address[table_idx] % self.page_offset)
+            if not is_r_vec:
+                vec_idx_in_hot_vec_loc = np.where(self.hot_vec_loc[table_idx] == vec_idx)[0][0] ## might be a potential problem
+                if self.r_load_balance:
+                    vec_logical_address = table_start_logical_address + vec_idx_in_hot_vec_loc * self.vec_size
+                else:
+                    vec_logical_address = table_start_logical_address + (self.collisions + vec_idx_in_hot_vec_loc) * self.vec_size
+            else:
+                if self.r_load_balance:
+                    vec_logical_address = table_idx * self.collisions * self.vec_size + vec_idx * self.vec_size
+                else:
+                    vec_logical_address = table_start_logical_address + vec_idx * self.vec_size
+
+            vpn = int(vec_logical_address // self.page_offset)
+            ppn = self.HBM_page_translation[vpn]
+            po_loc = vec_logical_address % self.page_offset
             HBM_loc = True
+
         else:
             table_start_logical_address = self.DIMM_table_start_address[table_idx]
-            table_start_vpn = int(table_start_logical_address // self.page_offset)
-            table_start_po = int(table_start_logical_address % self.page_offset)
-            ppn = self.DIMM_page_translation[table_start_vpn]
+            vec_logical_address = table_start_logical_address + (vec_idx - len(np.where(self.hot_vec_loc[table_idx] < vec_idx)[0])-1) * self.vec_size
+            vpn = int(vec_logical_address // self.page_offset)
+            ppn = self.DIMM_page_translation[vpn]
+            po_loc = vec_logical_address % self.page_offset
 
-        # generate physical address        
-        if HBM_loc:
-            if self.collisions > 0:
-                if not is_r_vec:
-                    physical_addr = int(ppn*self.page_offset + table_start_po + (self.collisions+vec_idx)*self.vec_size)
-                    if self.mapper_name_ == "SPACE":
-                        physical_addr = int(ppn*self.page_offset + table_start_po + (self.collisions+vec_idx*self.collisions+collision_idx)*self.vec_size)
-                else:
-                    physical_addr = int(ppn*self.page_offset + table_start_po + vec_idx*self.vec_size)
-                    if self.r_load_balance:
-                        physical_addr = int(table_idx * self.collisions * self.vec_size + vec_idx * self.vec_size)
-            else:
-                physical_addr = int(ppn*self.page_offset + table_start_po + vec_idx*self.vec_size)
-        else:
-                physical_addr = int(ppn*self.page_offset + table_start_po + vec_idx*self.vec_size)
+        # generate physical address
+
+        physical_addr = int(ppn*self.page_offset + po_loc)
+        # if HBM_loc:
+        #     if self.collisions > 0:
+        #         if not is_r_vec:
+        #             physical_addr = int(ppn*self.page_offset + (self.collisions+vec_idx)*self.vec_size)
+        #             if self.mapper_name_ == "SPACE":
+        #                 physical_addr = int(ppn*self.page_offset + (self.collisions+vec_idx*self.collisions+collision_idx)*self.vec_size)
+        #         else:
+        #             physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
+        #             if self.r_load_balance:
+        #                 physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
+        #     else:
+        #         physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
+        # else:
+        #         physical_addr = int(ppn*self.page_offset + vec_idx*self.vec_size)
 
         return HBM_loc, physical_addr
 
@@ -283,15 +322,23 @@ class RecNMPAddressTranslation(AddressTranslation):
             return False
 
     def physical_address_translation(self, table_idx, vec_idx, is_r_vec=False, collision_idx=0):
-        table_start_logical_address = self.DIMM_table_start_address[table_idx]
-        table_start_vpn = int(table_start_logical_address // self.page_offset)
-        table_start_po = int(table_start_logical_address % self.page_offset)
-        ppn = self.DIMM_page_translation[table_start_vpn]
 
-        if is_r_vec:
-            physical_addr = int(ppn * self.page_offset + table_start_po + vec_idx * self.vec_size)
+        table_start_logical_address = self.DIMM_table_start_address[table_idx]
+        if not is_r_vec:
+            vec_logical_address = table_start_logical_address + (self.collision + vec_idx) * self.vec_size
         else:
-            physical_addr = int(ppn * self.page_offset + table_start_po + (self.collisions + vec_idx) * self.vec_size)
+            vec_logical_address = table_start_logical_address + vec_idx * self.vec_size
+
+        vpn = int(vec_logical_address // self.page_offset)
+        ppn = self.DIMM_page_translation[vpn]
+        po_loc = vec_logical_address % self.page_offset
+
+        physical_addr = int(ppn*self.page_offset + po_loc)
+
+        # if is_r_vec:
+        #     physical_addr = int(ppn * self.page_offset + table_start_po + vec_idx * self.vec_size)
+        # else:
+        #     physical_addr = int(ppn * self.page_offset + table_start_po + (self.collisions + vec_idx) * self.vec_size)
 
         return False, physical_addr
 

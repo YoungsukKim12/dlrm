@@ -104,9 +104,9 @@ def get_physical_address(addr_translator, using_bg_map, table_index, vec_index, 
     in_HBM, emb_physical_addr = addr_translator.physical_address_translation(table_index, vec_index, is_r_vec, collision_idx)
     return in_HBM, emb_physical_addr
 
-def write_trace_line(wf, device, physical_addr, vec_type, total_burst):
+def write_trace_line(wf, device, physical_addr, vec_type, total_burst, table_idx=0, vec_idx=0):
     for k in range(total_burst):
-        wf.write(f"{device} {physical_addr+64*k} {vec_type} {k}\n")
+        wf.write(f"{device} {physical_addr+64*k} {vec_type} {k} {table_idx} {vec_idx}\n")
 
 def merge_kaggle_and_terabyte_data(
         train_data_path, 
@@ -143,21 +143,23 @@ def write_trace_file(
     train_data_path = './savedata'
 
     print('writing trace file...')
-    # if called_inside_DLRM:
-    #     embedding_profiles = MyProfiler.table_profiles
-    #     save_profile_result(train_data_path, dataset, collisions)
-    # else:
-    embedding_profiles = load_profile_result(train_data_path, dataset, collisions)
+    if called_inside_DLRM:
+        save_profile_result(train_data_path, dataset, collisions)
+        embedding_profiles = MyProfiler.table_profiles
+    else:
+        embedding_profiles = load_profile_result(train_data_path, dataset, collisions)
+
+    print('save & load complete')
 
     total_access = 0
     for i, prof_per_table in enumerate(embedding_profiles):
         total_access += np.sum(prof_per_table)
     for i, prof_per_table in enumerate(embedding_profiles):
         embedding_profiles[i] = embedding_profiles[i] / total_access / (kaggle_duplicate_on_merge+1)
-    print("terabyte profile len : ", len(embedding_profiles))
+    # print("terabyte profile len : ", len(embedding_profiles))
 
     if dataset == 'Terabyte' and merge_kaggle_and_terabyte:
-        print('merge two dataset')
+        print('merging two datasets...')
         kaggle_train_data, merged_profile = merge_kaggle_and_terabyte_data(
                                                 train_data_path=train_data_path,
                                                 collision=collisions,
@@ -173,16 +175,18 @@ def write_trace_file(
     addr_mappers = []
 
     addr_mappers.append(BasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="Basic"))
-    addr_mappers.append(RecNMPAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="RecNMP")) # RecNMP
-    addr_mappers.append(TRiMAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, bank_group_bits_naive=29, vec_size=vec_size, mapper_name="TRiM")) # TRiM
-    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.833, r_load_balance=False, mapper_name="SPACE")) # SPACE
-    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=True, mapper_name="HEAM")) #HEAM
+    # addr_mappers.append(RecNMPAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="RecNMP")) # RecNMP
+    # addr_mappers.append(TRiMAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, bank_group_bits_naive=29, vec_size=vec_size, mapper_name="TRiM")) # TRiM
+    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.833, r_load_balance=False, mapper_name="SPACE")) # SPACE
+    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=1, r_load_balance=False, mapper_name="SPACE")) # SPACE
+
+    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=False, mapper_name="HEAM")) #HEAM
 
     for addr_mapper in addr_mappers:
         mapper_name = addr_mapper.mapper_name()
-        writefile = f'./{dataset}_{(mapper_name)}_trace_col_{collisions}_vecsize_{vec_size}.txt'
+        writefile = f'./{dataset}_{(mapper_name)}_{collisions}_col_{vec_size}_vec.txt'
         if merge_kaggle_and_terabyte:
-            writefile = f'./{dataset}_{(mapper_name)}_trace_col_{collisions}_vecsize_{vec_size}_merge_count_{kaggle_duplicate_on_merge}.txt'
+            writefile = f'./{dataset}_{(mapper_name)}_{collisions}_col_{vec_size}_vec_{kaggle_duplicate_on_merge}_merge.txt'
 
         print("writing : ", writefile)
         with open(writefile, 'w') as wf:
@@ -198,11 +202,10 @@ def write_trace_file(
                     for i in range(kaggle_duplicate_on_merge):
                         _, kaggle_feat, _ = kaggle_train_data[random.randint(0, len(kaggle_train_data))]
                         feat = [*feat, *kaggle_feat]
-                        # print(len(feat))
 
                 for table, emb in enumerate(feat):
                     q_emb = emb // collisions
-                    r_emb = emb % collisions
+                    r_emb = int(emb % collisions)
 
                     # write q vector
                     in_HBM, emb_physical_addr = get_physical_address(
@@ -265,7 +268,7 @@ def write_trace_file(
                             # if q_written_device == "HBM":
                             device = "HBM"
                             vec_type = "r"
-                            write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
+                            write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst, table, r_emb)
                         elif mapper_name == "SPACE":
                             # apply reduction locality to vectors in HBM. (do not add r trace for vector access in HBM) - This is for mildly applying reduction locality for convenience
                             if q_written_device == "DIMM":
