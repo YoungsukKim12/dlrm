@@ -130,9 +130,9 @@ def merge_kaggle_and_terabyte_data(
     return kaggle_train_data, merged_profile
 
 def write_trace_file(
-        embedding_profile_savefile='./profile.pickle', 
+        embedding_profile_savefile='./profile.pickle',
         train_data=None,
-        collisions=4, 
+        collisions=4,
         vec_size=64,
         using_bg_map=False,
         called_inside_DLRM=False,
@@ -174,13 +174,27 @@ def write_trace_file(
 
     addr_mappers = []
 
-    addr_mappers.append(BasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="Basic"))
+    # addr_mappers.append(BasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="Basic"))
     # addr_mappers.append(RecNMPAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="RecNMP")) # RecNMP
     # addr_mappers.append(TRiMAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, bank_group_bits_naive=29, vec_size=vec_size, mapper_name="TRiM")) # TRiM
     # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.833, r_load_balance=False, mapper_name="SPACE")) # SPACE
-    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=1, r_load_balance=False, mapper_name="SPACE")) # SPACE
+    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.8, r_load_balance=False, mapper_name="SPACE")) # SPACE
+    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=False, mapper_name="HEAM")) #HEAM
 
-    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=False, mapper_name="HEAM")) #HEAM
+    # for load balance test
+    for i in [1]:
+        for j in [0, 0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05]:
+            addr_mappers.append(RecNMPAddressTranslation(
+                                            embedding_profiles=embedding_profiles, 
+                                            DIMM_size_gb=i, 
+                                            use_hot_access=False,
+                                            use_hot_ratio=True,
+                                            hot_vec_ratio=j,
+                                            collisions=collisions, 
+                                            vec_size=vec_size, 
+                                            mapper_name=f"lb_test_{i}GB_{j}_hot"
+                                        )
+                                    )
 
     for addr_mapper in addr_mappers:
         mapper_name = addr_mapper.mapper_name()
@@ -191,7 +205,7 @@ def write_trace_file(
         print("writing : ", writefile)
         with open(writefile, 'w') as wf:
             for i, data in enumerate(train_data):
-                if i % 1000 == 0:
+                if i % 4000 == 0:
                     print(f"{i}/{total_data} trace processed")
                 if i > 20000:
                     print('done writing tracing file')
@@ -242,6 +256,12 @@ def write_trace_file(
                         q_written_device = device
                         vec_type = "q" if collisions > 1 else "o"
                         write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
+                    elif "lb_test" in mapper_name:
+                        device = "HBM"
+                        vec_type = "o"
+                        if addr_mapper.is_hot_vector(table, q_emb):
+                            continue
+                        write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
 
                     # write r vector                
                     if collisions > 1:
@@ -274,7 +294,9 @@ def write_trace_file(
                             if q_written_device == "DIMM":
                                 device = "HBM"
                                 vec_type = "r"
-                                write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst)
+                                write_trace_line(wf, device, emb_physical_addr, vec_type, total_burst, table, r_emb)
+                        elif "lb_test" in mapper_name:
+                            continue
 
                 wf.write('\n')
 

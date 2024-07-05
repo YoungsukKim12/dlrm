@@ -100,6 +100,8 @@ from tricks.qr_embedding_bag import QREmbeddingBag
 sys.path.insert(0, '..')
 import my_profiler as myprofiler
 import HEAM_utils as myutils
+import pyprof
+from torch.profiler import profile, record_function, ProfilerActivity
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -1563,6 +1565,9 @@ def run():
                     previous_iteration_time = None
 
                 # train loop
+                # pyprof.init()
+                # with torch.autograd.profiler.emit_nvtx():
+                # with profile(activites=[ProfilerActivity.CPU], record_shapes=True) as prof:
                 for j, inputBatch in enumerate(train_ld):
 
                     # yskim
@@ -1818,14 +1823,14 @@ def run():
                 device,
                 use_gpu,
             )
+    # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
     # myprofiler.write_profile_result(train_data=train_data, collisions=args.qr_collisions, called_inside_DLRM=True)
     # myprofiler.save_profile_result(collision=args.qr_collisions)
-    print('writing trace file initiated')
-    for vec_size in [128, 256, 512]:
-        myprofiler.write_trace_file(train_data=train_data, collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='Terabyte', merge_kaggle_and_terabyte=False, kaggle_duplicate_on_merge=0)
-
     # myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
+    print('writing trace file initiated')
+    for vec_size in [64]:
+        myprofiler.write_trace_file(train_data=train_data, collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='Terabyte', merge_kaggle_and_terabyte=True, kaggle_duplicate_on_merge=0)
 
 
     # profiling

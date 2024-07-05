@@ -7,11 +7,18 @@ import os
 from abc import *
 
 class AddressTranslation():
-    def __init__(self, embedding_profiles, hot_vector_total_access, collisions, translator_name):
+    def __init__(self, embedding_profiles, collisions, translator_name, use_hot_access=True, use_hot_ratio=False, hot_vector_total_access=0.01, hot_vec_ratio=0):
         self.embedding_profiles = embedding_profiles
-        self.hot_vector_total_access = hot_vector_total_access
         self.collisions = collisions
         self.translator_name = translator_name
+        self.use_hot_access = use_hot_access
+        self.use_hot_ratio = use_hot_ratio
+        self.hot_vector_total_access = hot_vector_total_access
+        self.hot_vec_ratio = hot_vec_ratio
+        self.total_vector = 0
+
+        for table in self.embedding_profiles:
+            self.total_vector += len(table)
 
     def mapper_name(self):
         return self.translator_name
@@ -51,13 +58,29 @@ class AddressTranslation():
             hot_indices_per_table.append(hot_q_indices)
             hot_q_per_table.append(hot_q_ranking)
 
-        hot_vector_total_access = self.hot_vector_total_access
+        if self.use_hot_access:
+            hot_vector_total_access = self.hot_vector_total_access
 
-        if hot_vector_total_access == 1:
-            for i in range(len(self.embedding_profiles)):
-                hot_vec_location[i] = [j for j in range(len(self.embedding_profiles[i]))]
-        else:
-            while not hot_vector_total_access < 0:
+            if hot_vector_total_access == 1:
+                for i in range(len(self.embedding_profiles)):
+                    hot_vec_location[i] = [j for j in range(len(self.embedding_profiles[i]))]
+            else:
+                while not hot_vector_total_access < 0:
+                    hot_vecs = [hot_q_ranking[curr_idx_per_table[table_id]] if not curr_idx_per_table[table_id] == -1 else -10 for table_id, hot_q_ranking in enumerate(hot_q_per_table)]
+                    top_hot_vec_table_id = np.argmax(hot_vecs)
+                    top_hot_vec_access_ratio = np.max(hot_vecs)
+                    top_hot_vec_idx_inside_table = np.where(hot_indices_per_table[top_hot_vec_table_id] == curr_idx_per_table[top_hot_vec_table_id])[0][0]
+                    hot_vec_location[top_hot_vec_table_id].append(top_hot_vec_idx_inside_table)
+                    curr_idx_per_table[top_hot_vec_table_id] += 1
+                    # all vectors in this table are used
+                    if len(hot_q_per_table[top_hot_vec_table_id]) == curr_idx_per_table[top_hot_vec_table_id]:
+                        curr_idx_per_table[top_hot_vec_table_id] = -1
+
+                    hot_vector_total_access -= top_hot_vec_access_ratio
+        elif self.use_hot_ratio:
+            target_hot_vecs = self.hot_vec_ratio * self.total_vector
+            
+            while not target_hot_vecs < 0:
                 hot_vecs = [hot_q_ranking[curr_idx_per_table[table_id]] if not curr_idx_per_table[table_id] == -1 else -10 for table_id, hot_q_ranking in enumerate(hot_q_per_table)]
                 top_hot_vec_table_id = np.argmax(hot_vecs)
                 top_hot_vec_access_ratio = np.max(hot_vecs)
@@ -68,22 +91,16 @@ class AddressTranslation():
                 if len(hot_q_per_table[top_hot_vec_table_id]) == curr_idx_per_table[top_hot_vec_table_id]:
                     curr_idx_per_table[top_hot_vec_table_id] = -1
 
-                hot_vector_total_access -= top_hot_vec_access_ratio
+                target_hot_vecs -= 1
 
         for i in range(len(hot_vec_location)):
             hot_vec_location[i] = np.sort(hot_vec_location[i])
 
-        total_vector = 0
         hot_vectors = 0
-
-        for table in self.embedding_profiles:
-            total_vector += len(table)
         for hot_vecs in hot_vec_location:
             hot_vectors += len(hot_vecs)
 
-        print("total vector : ", total_vector)
-        print("total hots : ", hot_vectors)
-        
+        print(f"total vecs {self.total_vector} / total hots {hot_vectors}: ")        
 
         return hot_vec_location
 
@@ -279,13 +296,25 @@ class RecNMPAddressTranslation(AddressTranslation):
     def __init__(
         self, 
         embedding_profiles, 
-        DIMM_size_gb=8, 
+        DIMM_size_gb=8,
+        use_hot_access=True,
+        use_hot_ratio=False,
         hot_vector_total_access=0.05,
+        hot_vec_ratio=0,
         vec_size=64,
         collisions=4,
         mapper_name="RecNMP"
     ):  
-        super().__init__(embedding_profiles, hot_vector_total_access, collisions, mapper_name)
+        super().__init__(
+            embedding_profiles, 
+            collisions, 
+            mapper_name, 
+            use_hot_access=use_hot_access,
+            use_hot_ratio=use_hot_ratio,
+            hot_vector_total_access=hot_vector_total_access,
+            hot_vec_ratio=hot_vec_ratio
+        )
+
         self.vec_size = vec_size
         self.collisions = collisions
         self.page_offset = math.pow(2, 12)
@@ -325,7 +354,7 @@ class RecNMPAddressTranslation(AddressTranslation):
 
         table_start_logical_address = self.DIMM_table_start_address[table_idx]
         if not is_r_vec:
-            vec_logical_address = table_start_logical_address + (self.collision + vec_idx) * self.vec_size
+            vec_logical_address = table_start_logical_address + (self.collisions + vec_idx) * self.vec_size
         else:
             vec_logical_address = table_start_logical_address + vec_idx * self.vec_size
 
