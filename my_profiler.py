@@ -40,7 +40,7 @@ def total_compressed_embs():
     return tot_embs
 
 def save_profile_result(path, dataset, collision):
-    savefile = f'./{path}/{dataset}/profile_collision_{collision}.pickle'
+    savefile = f'{path}/{dataset}/profile_collision_{collision}.pickle'
     profiles = MyProfiler.table_profiles
     with open(savefile, 'wb') as sf:
         pickle.dump(profiles, sf)
@@ -137,19 +137,19 @@ def write_trace_file(
         using_bg_map=False,
         called_inside_DLRM=False,
         dataset='kaggle',
-        merge_kaggle_and_terabyte=True,
-        kaggle_duplicate_on_merge=1
+        merge_kaggle_and_terabyte=False,
+        kaggle_duplicate_on_merge=0
     ):
     train_data_path = './savedata'
 
     print('writing trace file...')
     if called_inside_DLRM:
-        save_profile_result(train_data_path, dataset, collisions)
         embedding_profiles = MyProfiler.table_profiles
+        save_profile_result(train_data_path, dataset, collisions)
     else:
         embedding_profiles = load_profile_result(train_data_path, dataset, collisions)
 
-    print('save & load complete')
+
 
     total_access = 0
     for i, prof_per_table in enumerate(embedding_profiles):
@@ -174,27 +174,12 @@ def write_trace_file(
 
     addr_mappers = []
 
+    # jhlim temp
     # addr_mappers.append(BasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="Basic"))
     # addr_mappers.append(RecNMPAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, mapper_name="RecNMP")) # RecNMP
     # addr_mappers.append(TRiMAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, bank_group_bits_naive=29, vec_size=vec_size, mapper_name="TRiM")) # TRiM
-    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.833, r_load_balance=False, mapper_name="SPACE")) # SPACE
-    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.8, r_load_balance=False, mapper_name="SPACE")) # SPACE
-    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=False, mapper_name="HEAM")) #HEAM
-
-    # for load balance test
-    for i in [1]:
-        for j in [0, 0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05]:
-            addr_mappers.append(RecNMPAddressTranslation(
-                                            embedding_profiles=embedding_profiles, 
-                                            DIMM_size_gb=i, 
-                                            use_hot_access=False,
-                                            use_hot_ratio=True,
-                                            hot_vec_ratio=j,
-                                            collisions=collisions, 
-                                            vec_size=vec_size, 
-                                            mapper_name=f"lb_test_{i}GB_{j}_hot"
-                                        )
-                                    )
+    addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.833, r_load_balance=False, mapper_name="SPACE")) # SPACE
+    # addr_mappers.append(HeteroBasicAddressTranslation(embedding_profiles, DIMM_size_gb=16, collisions=collisions, vec_size=vec_size, hot_vector_total_access=0.952, r_load_balance=True, mapper_name="HEAM")) #HEAM
 
     for addr_mapper in addr_mappers:
         mapper_name = addr_mapper.mapper_name()
