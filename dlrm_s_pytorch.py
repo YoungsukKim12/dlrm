@@ -76,11 +76,21 @@ import mlperf_logger
 
 # numpy
 import numpy as np
+import optim.rwsadagrad as RowWiseSparseAdagrad
 import sklearn.metrics
 
 # pytorch
 import torch
 import torch.nn as nn
+
+# dataloader
+try:
+    from internals import fbDataLoader, fbInputBatchFormatter
+
+    has_internal_libs = True
+except ImportError:
+    has_internal_libs = False
+
 from torch._ops import ops
 from torch.autograd.profiler import record_function
 from torch.nn.parallel.parallel_apply import parallel_apply
@@ -88,18 +98,20 @@ from torch.nn.parallel.replicate import replicate
 from torch.nn.parallel.scatter_gather import gather, scatter
 from torch.nn.parameter import Parameter
 from torch.optim.lr_scheduler import _LRScheduler
-import optim.rwsadagrad as RowWiseSparseAdagrad
 from torch.utils.tensorboard import SummaryWriter
 
 # mixed-dimension trick
-from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
+from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
 
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
 
-sys.path.insert(0, '..')
-import my_profiler as myprofiler
-import HEAM_utils as myutils
+# jhlim
+# TT-Rec
+from tt_rec.tt_embeddings_ops import TTEmbeddingBag
+from tt_profiler import tt_profiler
+
+tt_instance = tt_profiler()
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -154,8 +166,11 @@ def loss_fn_wrap(Z, T, use_gpu, device):
 # The following function is a wrapper to avoid checking this multiple times in th
 # loop below.
 def unpack_batch(b):
-    # Experiment with unweighted samples
-    return b[0], b[1], b[2], b[3], torch.ones(b[3].size()), None
+    if args.data_generation == "internal":
+        return fbInputBatchFormatter(b, args.data_size)
+    else:
+        # Experiment with unweighted samples
+        return b[0], b[1], b[2], b[3], torch.ones(b[3].size()), None
 
 
 class LRPolicyScheduler(_LRScheduler):
@@ -240,17 +255,30 @@ class DLRM_Net(nn.Module):
     def create_emb(self, m, ln, weighted_pooling=None):
         emb_l = nn.ModuleList()
         v_W_l = []
-        # yskim space
-        print('total tables: ', ln.size)
-        print('total embeddings: ', np.sum(ln))
+
+        # jhlim
+        # print(f"The number of {m}-dim embedding vectors in each table.")
         for i in range(0, ln.size):
             if ext_dist.my_size > 1:
                 if i not in self.local_emb_indices:
                     continue
             n = ln[i]
-
+            # print(f"[Table {i}]", n)
+            
             # construct embedding operator
-            if self.qr_flag and n > self.qr_threshold:
+            # if self.qr_flag and n > self.qr_threshold:
+            if True:
+                # print("Create Embeddings from TTEmbeddingBag")
+                EE = TTEmbeddingBag(
+                    n, m, [32,32],
+                    None, None,
+                    sparse=False,
+                    weight_dist="approx-normal",
+                    use_cache=False,
+                    # cache_size=(n//4),
+                    # hashtbl_size=(n//4)
+                )
+            elif self.qr_flag and n > self.qr_threshold:
                 EE = QREmbeddingBag(
                     n,
                     m,
@@ -258,14 +286,7 @@ class DLRM_Net(nn.Module):
                     operation=self.qr_operation,
                     mode="sum",
                     sparse=True,
-                    expand=self.qr_expand
                 )
-
-                # yskim space
-                q_len, r_len = EE.get_qr_size()
-                myprofiler.MyProfiler.set_qr_profile(i, q_len, r_len)
-
-
             elif self.md_flag and n > self.md_threshold:
                 base = max(m)
                 _m = m[i] if n > self.md_threshold else base
@@ -279,7 +300,6 @@ class DLRM_Net(nn.Module):
                 EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
                 # initialize embeddings
                 # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
-                print(n)
                 W = np.random.uniform(
                     low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
                 ).astype(np.float32)
@@ -293,10 +313,19 @@ class DLRM_Net(nn.Module):
                 v_W_l.append(None)
             else:
                 v_W_l.append(torch.ones(n, dtype=torch.float32))
-
             emb_l.append(EE)
-        compressed_embs = myprofiler.total_compressed_embs()
-        print("total compressed embeddings: ", compressed_embs)
+            
+            # jhlim
+            # print("EE:", EE)
+            # EE: TTEmbeddingBag(
+            # (tt_cores): ParameterList(
+            #     (0): Parameter containing: [torch.FloatTensor of size 1x5x16]
+            #     (1): Parameter containing: [torch.FloatTensor of size 1x5x128]
+            #     (2): Parameter containing: [torch.FloatTensor of size 1x8x32]
+            # )
+            # (optimizer_state): BufferList()
+            # )
+
         return emb_l, v_W_l
 
     def __init__(
@@ -316,11 +345,10 @@ class DLRM_Net(nn.Module):
         qr_operation="mult",
         qr_collisions=0,
         qr_threshold=200,
-        qr_expand=1,
         md_flag=False,
         md_threshold=200,
         weighted_pooling=None,
-        loss_function="bce"
+        loss_function="bce",
     ):
         super(DLRM_Net, self).__init__()
 
@@ -341,7 +369,7 @@ class DLRM_Net(nn.Module):
             self.arch_interaction_itself = arch_interaction_itself
             self.sync_dense_params = sync_dense_params
             self.loss_threshold = loss_threshold
-            self.loss_function=loss_function
+            self.loss_function = loss_function
             if weighted_pooling is not None and weighted_pooling != "fixed":
                 self.weighted_pooling = "learned"
             else:
@@ -352,8 +380,6 @@ class DLRM_Net(nn.Module):
                 self.qr_collisions = qr_collisions
                 self.qr_operation = qr_operation
                 self.qr_threshold = qr_threshold
-                self.qr_expand = qr_expand
-                print('qr collision : %d, expand : %d' %(self.qr_collisions, self.qr_expand))
             # create variables for MD embedding if applicable
             self.md_flag = md_flag
             if self.md_flag:
@@ -421,11 +447,15 @@ class DLRM_Net(nn.Module):
         #   corresponding to a single lookup
         # 2. for each embedding the lookups are further organized into a batch
         # 3. for a list of embedding tables there is a list of batched lookups
+        
+        # jhlim
+        # print("lS_i:", lS_i)
+        # print("lS_o:", lS_o)
 
         ly = []
+        tt_index = [[] for _ in range(26)]
         for k, sparse_index_group_batch in enumerate(lS_i):
             sparse_offset_group_batch = lS_o[k]
-
             # embedding lookup
             # We are using EmbeddingBag, which implicitly uses sum operator.
             # The embeddings are represented as tall matrices, with sum
@@ -436,8 +466,28 @@ class DLRM_Net(nn.Module):
                 per_sample_weights = v_W_l[k].gather(0, sparse_index_group_batch)
             else:
                 per_sample_weights = None
+            
+            # jhlim
+            # emb_l: 26 TT-Embedding Tables
+            # apply tt_profiler
+            # if k in [-1, 2, 11, 20, 15, 3, 23, 25]:
+            if k in [-1, 2]:
+                print(f"[Table {k}]")
+                # print("emb_idx:", sparse_index_group_batch)
+                tt_instance.translate_idx(table_idx=k, emb_idx=sparse_index_group_batch, J=[4, 4, 4])
+                tt_index[k].append(tt_instance.output)
 
-            if self.quantize_emb:
+            E = emb_l[k]
+            if (isinstance(E, TTEmbeddingBag)):
+                l = sparse_index_group_batch.shape[0]
+                ll = torch.empty(1, dtype=torch.long)
+                ll[0] = l
+                if (sparse_offset_group_batch.is_cuda):
+                    ll = ll.to(torch.device("cuda"))
+                sparse_offset = torch.cat((sparse_offset_group_batch, ll), dim=0)
+                V = E(sparse_index_group_batch,sparse_offset)
+                ly.append(V)
+            elif self.quantize_emb:
                 s1 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
                 s2 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
                 print("quantized emb sizes:", s1, s2)
@@ -460,25 +510,20 @@ class DLRM_Net(nn.Module):
                 ly.append(QV)
             else:
                 E = emb_l[k]
-                # sparse_index_group_batch : each table / sparse_offset_group_batch : table index
-                if args.qr_flag:
-                    # yskim space
-                    V = E(
-                    k,
+                V = E(
                     sparse_index_group_batch,
                     sparse_offset_group_batch,
                     per_sample_weights=per_sample_weights,
-                    )
-                else:
-                    V = E(
-                        sparse_index_group_batch,
-                        sparse_offset_group_batch,
-                        per_sample_weights=per_sample_weights,
-                    )
+                )
 
                 ly.append(V)
-
-        # print(ly)
+        
+        # jhlim
+        # ly: embedding vector value
+        # device='cuda:0', grad_fn=<SelectBackward0>), tensor([[ 4.33132,  1.66162, -8.41873,  ..., 11.70818, -4.37911, -6.07833],
+        # [ 2.08522,  1.18608, -3.11766,  ..., -2.58857,  3.57472, -4.60772],
+        # [ 4.33132,  1.66162, -8.41873,  ..., 11.70818, -4.37911, -6.07833],
+        # print("ly:", ly)
         return ly
 
     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
@@ -502,6 +547,7 @@ class DLRM_Net(nn.Module):
         self.quantize_bits = bits
 
     def interact_features(self, x, ly):
+
         if self.arch_interaction_op == "dot":
             # concatenate dense and sparse features
             (batch_size, d) = x.shape
@@ -611,7 +657,6 @@ class DLRM_Net(nn.Module):
         # debug prints
         # print("intermediate")
         # print(x.detach().cpu().numpy())
-
         # process sparse features(using embeddings), resulting in a list of row vectors
         ly = self.apply_emb(lS_o, lS_i, self.emb_l, self.v_W_l)
         # for y in ly:
@@ -917,7 +962,7 @@ def inference(
             ),
             flush=True,
         )
-    return model_metrics_dict, is_best, acc_test
+    return model_metrics_dict, is_best
 
 
 def run():
@@ -947,9 +992,6 @@ def run():
     parser.add_argument("--qr-threshold", type=int, default=200)
     parser.add_argument("--qr-operation", type=str, default="mult")
     parser.add_argument("--qr-collisions", type=int, default=4)
-    # yskim space
-    parser.add_argument("--qr-expand", type=int, default=1)
-
     # activations and loss
     parser.add_argument("--activation-function", type=str, default="relu")
     parser.add_argument("--loss-function", type=str, default="mse")  # or bce or wbce
@@ -962,8 +1004,11 @@ def run():
     parser.add_argument("--data-size", type=int, default=1)
     parser.add_argument("--num-batches", type=int, default=0)
     parser.add_argument(
-        "--data-generation", type=str, default="random"
-    )  # synthetic or dataset
+        "--data-generation",
+        type=str,
+        choices=["random", "dataset", "internal"],
+        default="random",
+    )  # synthetic, dataset or internal
     parser.add_argument(
         "--rand-data-dist", type=str, default="uniform"
     )  # uniform or gaussian
@@ -1046,11 +1091,13 @@ def run():
     global nbatches_test
     global writer
     args = parser.parse_args()
-    #print("enable_profiling : ", args.enable_profiling)
+
     if args.dataset_multiprocessing:
-        assert float(sys.version[:3]) > 3.7, "The dataset_multiprocessing " + \
-        "flag is susceptible to a bug in Python 3.7 and under. " + \
-        "https://github.com/facebookresearch/dlrm/issues/172"
+        assert sys.version_info[0] >= 3 and sys.version_info[1] > 7, (
+            "The dataset_multiprocessing "
+            + "flag is susceptible to a bug in Python 3.7 and under. "
+            + "https://github.com/facebookresearch/dlrm/issues/172"
+        )
 
     if args.mlperf_logging:
         mlperf_logger.log_event(key=mlperf_logger.constants.CACHE_CLEAR, value=True)
@@ -1073,9 +1120,7 @@ def run():
                 "ERROR: 4 and 8-bit quantization with mixed dimensions is not supported"
             )
         if args.use_gpu:
-            sys.exit(
-                "ERROR: 4 and 8-bit quantization on GPU is not supported"
-            )
+            sys.exit("ERROR: 4 and 8-bit quantization on GPU is not supported")
 
     ### some basic setup ###
     np.random.seed(args.numpy_rand_seed)
@@ -1090,12 +1135,12 @@ def run():
         # if the parameter is not set, use the same parameter for training
         args.test_num_workers = args.num_workers
 
-    print(torch.cuda.is_available())
-
     use_gpu = args.use_gpu and torch.cuda.is_available()
 
     if not args.debug_mode:
-        ext_dist.init_distributed(local_rank=args.local_rank, use_gpu=use_gpu, backend=args.dist_backend)
+        ext_dist.init_distributed(
+            local_rank=args.local_rank, use_gpu=use_gpu, backend=args.dist_backend
+        )
 
     if use_gpu:
         torch.cuda.manual_seed_all(args.numpy_rand_seed)
@@ -1123,14 +1168,12 @@ def run():
         mlperf_logger.barrier()
 
     if args.data_generation == "dataset":
-        print("dataset load start")
         train_data, train_ld, test_data, test_ld = dp.make_criteo_data_and_loaders(args)
         table_feature_map = {idx: idx for idx in range(len(train_data.counts))}
         nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
         nbatches_test = len(test_ld)
-        print("dataset load complete")
+
         ln_emb = train_data.counts
-        print("total train data : ", train_data.counts)
         # enforce maximum limit on number of vectors per embedding
         if args.max_ind_range > 0:
             ln_emb = np.array(
@@ -1145,11 +1188,21 @@ def run():
             ln_emb = np.array(ln_emb)
         m_den = train_data.m_den
         ln_bot[0] = m_den
+    elif args.data_generation == "internal":
+        if not has_internal_libs:
+            raise Exception("Internal libraries are not available.")
+        NUM_BATCHES = 5000
+        nbatches = args.num_batches if args.num_batches > 0 else NUM_BATCHES
+        train_ld, feature_to_num_embeddings = fbDataLoader(args.data_size, nbatches)
+        ln_emb = np.array(list(feature_to_num_embeddings.values()))
+        m_den = ln_bot[0]
     else:
         # input and target at random
         ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
         m_den = ln_bot[0]
-        train_data, train_ld, test_data, test_ld = dp.make_random_data_and_loader(args, ln_emb, m_den)
+        train_data, train_ld, test_data, test_ld = dp.make_random_data_and_loader(
+            args, ln_emb, m_den
+        )
         nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
         nbatches_test = len(test_ld)
 
@@ -1311,11 +1364,10 @@ def run():
         qr_operation=args.qr_operation,
         qr_collisions=args.qr_collisions,
         qr_threshold=args.qr_threshold,
-        qr_expand=args.qr_expand,
         md_flag=args.md_flag,
         md_threshold=args.md_threshold,
         weighted_pooling=args.weighted_pooling,
-        loss_function=args.loss_function
+        loss_function=args.loss_function,
     )
 
     # test prints
@@ -1350,15 +1402,13 @@ def run():
             dlrm.top_l = ext_dist.DDP(dlrm.top_l)
 
     if not args.inference_only:
-        if use_gpu and args.optimizer in ["rwsadagrad"]:
-        # if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
+        if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
             sys.exit("GPU version of Adagrad is not supported by PyTorch.")
         # specify the optimizer algorithm
         opts = {
             "sgd": torch.optim.SGD,
             "rwsadagrad": RowWiseSparseAdagrad.RWSAdagrad,
             "adagrad": torch.optim.Adagrad,
-            "Adam" : torch.optim.SparseAdam
         }
 
         parameters = (
@@ -1382,11 +1432,7 @@ def run():
                 },
             ]
         )
-        if args.optimizer == 'Adam':
-            optimizer = torch.optim.Adam(parameters, lr=args.learning_rate, amsgrad=True)
-        else:
-            optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
-
+        optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
         lr_scheduler = LRPolicyScheduler(
             optimizer,
             args.lr_num_warmup_steps,
@@ -1429,7 +1475,7 @@ def run():
                 # note that the call to .to(device) has already happened
                 ld_model = torch.load(
                     args.load_model,
-                    map_location=torch.device("cuda")
+                    map_location=torch.device("cuda"),
                     # map_location=lambda storage, loc: storage.cuda(0)
                 )
         else:
@@ -1529,10 +1575,6 @@ def run():
     tb_file = "./" + args.tensor_board_filename
     writer = SummaryWriter(tb_file)
 
-    # train
-    print("nbatches : ", nbatches)
-    print("train loop len : ", len(train_ld))
-
     ext_dist.barrier()
     with torch.autograd.profiler.profile(
         args.enable_profiling, use_cuda=use_gpu, record_shapes=True
@@ -1562,14 +1604,8 @@ def run():
                 if args.mlperf_logging:
                     previous_iteration_time = None
 
-                # train loop
                 for j, inputBatch in enumerate(train_ld):
-
-                    # yskim
-                    # if j > 1028 :
-                    #    print('escape!')
-                    #    break
-
+                    # print(f"[Batch {j}]")
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
 
@@ -1635,13 +1671,19 @@ def run():
                     with record_function("DLRM backward"):
                         # scaled error gradient propagation
                         # (where we do not accumulate gradients across mini-batches)
-                        if (args.mlperf_logging and (j + 1) % args.mlperf_grad_accum_iter == 0) or not args.mlperf_logging:
+                        if (
+                            args.mlperf_logging
+                            and (j + 1) % args.mlperf_grad_accum_iter == 0
+                        ) or not args.mlperf_logging:
                             optimizer.zero_grad()
                         # backward pass
                         E.backward()
 
                         # optimizer
-                        if (args.mlperf_logging and (j + 1) % args.mlperf_grad_accum_iter == 0) or not args.mlperf_logging:
+                        if (
+                            args.mlperf_logging
+                            and (j + 1) % args.mlperf_grad_accum_iter == 0
+                        ) or not args.mlperf_logging:
                             optimizer.step()
                             lr_scheduler.step()
 
@@ -1713,7 +1755,7 @@ def run():
                         print(
                             "Testing at - {}/{} of epoch {},".format(j + 1, nbatches, k)
                         )
-                        model_metrics_dict, is_best, accuracy = inference(
+                        model_metrics_dict, is_best = inference(
                             args,
                             dlrm,
                             best_acc_test,
@@ -1724,9 +1766,6 @@ def run():
                             log_iter,
                         )
 
-                        if is_best:
-                            best_acc_test = accuracy
-
                         if (
                             is_best
                             and not (args.save_model == "")
@@ -1736,9 +1775,9 @@ def run():
                             model_metrics_dict["iter"] = j + 1
                             model_metrics_dict["train_loss"] = train_loss
                             model_metrics_dict["total_loss"] = total_loss
-                            model_metrics_dict[
-                                "opt_state_dict"
-                            ] = optimizer.state_dict()
+                            model_metrics_dict["opt_state_dict"] = (
+                                optimizer.state_dict()
+                            )
                             print("Saving model to {}".format(args.save_model))
                             torch.save(model_metrics_dict, args.save_model)
 
@@ -1818,14 +1857,6 @@ def run():
                 device,
                 use_gpu,
             )
-
-    print('writing trace file initiated')
-    for vec_size in [128, 256, 512]:
-        myprofiler.write_trace_file(train_data=train_data ,collisions=args.qr_collisions, vec_size=vec_size, called_inside_DLRM=True, dataset='kaggle', merge_kaggle_and_terabyte=False, kaggle_duplicate_on_merge=4)
-
-    # jhlim temp
-    # myutils.RunCacheSimulation(called_inside_DLRM=True, train_data=train_data, collision=args.qr_collisions)
-
 
     # profiling
     if args.enable_profiling:
