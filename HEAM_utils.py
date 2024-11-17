@@ -59,8 +59,10 @@ class Cache:
 
         if self.sets[set_index].access_block(tag):
             self.hits[category] += 1
+            return True
         else:
             self.misses[category] += 1
+            return False
 
     def category_hit_rate(self, category):
         total_accesses = sum(self.hits.values()) + sum(self.misses.values())
@@ -119,6 +121,54 @@ def CacheSimulator(train_data=None, collision=4, vec_size=64, Cache_MB=1, Block_
     print(f"Q hitrate : {q_hitrate}") 
     print(f"R hitrate : {r_hitrate}")
     print(f"Total hitrate : {total_hitrate}")
+
+def ProactivePIMCacheSimulator(train_data=None, collision=4, vec_size=64, Cache_MB=1, Block_size=64):
+    MB_size = 2**20
+    CACHE_SIZE = Cache_MB*MB_size  # in bytes
+    BLOCK_SIZE = Block_size    # in bytes
+    ASSOCIATIVITY = 4
+    cache = Cache(CACHE_SIZE, BLOCK_SIZE, ASSOCIATIVITY)
+    total_burst = vec_size // 64
+
+    embedding_profiles = prof.load_profile_result('./savedata', 'Terabyte', collision)
+    translator = BasicAddressTranslation(embedding_profiles, collisions=collision, vec_size=vec_size)
+    total_data = len(train_data)
+
+    for i, data in enumerate(train_data):
+        _, feat, _ = data
+        if i > 100000:
+            break
+
+        for table, emb in enumerate(feat):
+            q_emb = emb // collision
+            r_emb = emb % collision
+            _, q_pa = prof.get_physical_address(
+                        addr_translator=translator,
+                        using_bg_map=False,
+                        table_index=table,
+                        vec_index=q_emb,
+                        is_r_vec=False
+                        )
+            _, r_pa = prof.get_physical_address(
+                        addr_translator=translator,
+                        using_bg_map=False,
+                        table_index=table,
+                        vec_index=r_emb,
+                        is_r_vec=True
+                        )
+            for j in range(total_burst):
+                cache.access(q_pa + 64*j, 'q')
+                cache.access(r_pa + 64*j, 'r')
+
+    q_hitrate = round(cache.category_hit_rate('q'), 3)
+    r_hitrate = round(cache.category_hit_rate('r'), 3)
+    total_hitrate = round(cache.overall_hit_rate(), 3)
+
+    print(f"\nCache Simulation on {Cache_MB}MB Cache/ {Block_size}B block / Vector {vec_size}B / collision {collision}\n")
+    print(f"Q hitrate : {q_hitrate}") 
+    print(f"R hitrate : {r_hitrate}")
+    print(f"Total hitrate : {total_hitrate}")
+
 
 def RunCacheSimulation(called_inside_DLRM=False, train_data=None, collision=8, dataset='kaggle'):
     if not called_inside_DLRM:

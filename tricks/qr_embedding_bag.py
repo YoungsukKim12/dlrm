@@ -165,12 +165,12 @@ class QREmbeddingBag(nn.Module):
         nn.init.uniform_(self.weight_q, np.sqrt(1 / self.num_categories))
         nn.init.uniform_(self.weight_r, np.sqrt(1 / self.num_categories))
 
-    def forward(self, k, input, offsets=None, per_sample_weights=None):
+    def forward(self, input, offsets=None, per_sample_weights=None):
         input_q = (input / self.num_collisions).long()
         input_r = torch.remainder(input, self.num_collisions).long()
 
-        #yskim space
-        MyProfiler.record_qr_profile(k, input_q, input_r)
+        # #yskim space
+        # MyProfiler.record_qr_profile(k, input_q, input_r)
         if self.expand > 1:
             input_r_hash = torch.remainder(input_q, self.expand).long()
             input_r = self.num_collisions * input_r_hash + input_r

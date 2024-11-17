@@ -121,16 +121,16 @@ def validate_list(ctx: click.core.Context, param: click.core.Option, param_str: 
 
 
 @click.command()
-@click.option("--batch-size", default=512)
+@click.option("--batch-size", default=4)
 @click.option("--iters", default=10)
-@click.option("--pooling-factor", default=20)
+@click.option("--pooling-factor", default=40)
 @click.option("--p-shapes", default="200,220,250", callback=validate_list)
-@click.option("--q-shapes", default="4,4,4", callback=validate_list)
+@click.option("--q-shapes", default="8,8,4", callback=validate_list)
 @click.option("--ranks", default="32,32", callback=validate_list)
 @click.option("--long-index", is_flag=True, default=True)
 @click.option("--sparse", is_flag=True, default=True)
 @click.option("--optimizer", default="sgd")
-@click.option("--run-baseline", is_flag=True, default=False)
+@click.option("--run-baseline", is_flag=True, default=True)
 def main(
     batch_size,
     iters,
@@ -155,7 +155,7 @@ def main(
         q_shapes[0] * ranks[0] * q_shapes[1] * ranks[1]
         + q_shapes[0] * q_shapes[1] * ranks[1] * q_shapes[2]
     )
-    flop = 2.0 * nnz * flop * iters
+    flop = nnz * flop * iters
     bw = 4.0 * nnz * embedding_dim * iters
 
     # create TT-Embedding op
@@ -183,12 +183,12 @@ def main(
     grad_output = torch.rand(batch_size, embedding_dim, device=device) * 0.1
     time_per_iter = benchmark_requests(
         requests,
-        lambda indices, offsets, _: tt_emb(indices, offsets).backward(grad_output),
+        lambda indices, offsets, _: tt_emb(indices, offsets),
     )
     logging.info(
         f"TTEmbeddingBag FWD-BWD time/nnz: {time_per_iter / nnz * 1e6: .3f} usecs, "
-        f"GFLOPS: {3.0 * flop / time_per_iter / 1e9: .3f}, "
-        f"BW: {3.0 * bw / time_per_iter / 1e9: .3f}"
+        f"GFLOPS: {flop / time_per_iter / 1e9: .3f}, "
+        f"BW: {bw / time_per_iter / 1e9: .3f}"
     )
 
     # EmbeddingBag
@@ -200,13 +200,17 @@ def main(
             mode="sum",
             include_last_offset=True,
         )
+        
+        flop = embedding_dim * (nnz-1)
+
         emb.to(device)
         time_per_iter = benchmark_requests(
             requests,
-            lambda indices, offsets, _: emb(indices, offsets).backward(grad_output),
+            lambda indices, offsets, _: emb(indices, offsets),
         )
         logging.info(
             f"EmbeddingBag FWD-BWD time/nnz: {time_per_iter / nnz * 1e6: .3f} usecs, "
+            f"GFLOPS: {flop / time_per_iter / 1e9: .3f}, "
             f"BW: {3.0 * bw / time_per_iter / 1e9: .3f}"
         )
 

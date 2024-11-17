@@ -27,7 +27,8 @@ tnn_utils = CUDAExtension(
             "--expt-relaxed-constexpr",
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-I/usr/lib/cub-1.8.0",
-            '-gencode=arch=compute_61,code="sm_61"',
+            '-arch=sm_50',
+            '-gencode=arch=compute_52,code=sm_52',
         ],
     },
 )

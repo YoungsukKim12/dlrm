@@ -106,12 +106,16 @@ from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
 
+sys.path.insert(0, '..')
+import proactivePIM_trace_generater as trace_generator
+from proactivePIM_trace_generater import EmbTableProfiler
+
 # jhlim
 # TT-Rec
-from tt_rec.tt_embeddings_ops import TTEmbeddingBag
-from tt_profiler import tt_profiler
+# from tt_rec.tt_embeddings_ops import TTEmbeddingBag
+# from tt_profiler import tt_profiler
 
-tt_instance = tt_profiler()
+# tt_instance = tt_profiler()
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -263,21 +267,24 @@ class DLRM_Net(nn.Module):
                 if i not in self.local_emb_indices:
                     continue
             n = ln[i]
+
+            EmbTableProfiler.set_table_profile(i, n)
             # print(f"[Table {i}]", n)
-            
             # construct embedding operator
             # if self.qr_flag and n > self.qr_threshold:
-            if True:
+            if False:
+            # if self.tt_flag:
                 # print("Create Embeddings from TTEmbeddingBag")
-                EE = TTEmbeddingBag(
-                    n, m, [32,32],
-                    None, None,
-                    sparse=False,
-                    weight_dist="approx-normal",
-                    use_cache=False,
-                    # cache_size=(n//4),
-                    # hashtbl_size=(n//4)
-                )
+                # EE = TTEmbeddingBag(
+                #     n, m, [32,32],
+                #     None, None,
+                #     sparse=False,
+                #     weight_dist="approx-normal",
+                #     use_cache=False,
+                #     # cache_size=(n//4),
+                #     # hashtbl_size=(n//4)
+                # )
+                pass
             elif self.qr_flag and n > self.qr_threshold:
                 EE = QREmbeddingBag(
                     n,
@@ -467,26 +474,31 @@ class DLRM_Net(nn.Module):
             else:
                 per_sample_weights = None
             
+
+            EmbTableProfiler.record_profile(k, sparse_index_group_batch)
+
             # jhlim
             # emb_l: 26 TT-Embedding Tables
             # apply tt_profiler
             # if k in [-1, 2, 11, 20, 15, 3, 23, 25]:
-            if k in [-1, 2]:
-                print(f"[Table {k}]")
-                # print("emb_idx:", sparse_index_group_batch)
-                tt_instance.translate_idx(table_idx=k, emb_idx=sparse_index_group_batch, J=[4, 4, 4])
-                tt_index[k].append(tt_instance.output)
+            # if k in [-1, 2]:
+            #     print(f"[Table {k}]")
+            #     # print("emb_idx:", sparse_index_group_batch)
+            #     tt_instance.translate_idx(table_idx=k, emb_idx=sparse_index_group_batch, J=[4, 4, 4])
+            #     tt_index[k].append(tt_instance.output)
 
             E = emb_l[k]
-            if (isinstance(E, TTEmbeddingBag)):
-                l = sparse_index_group_batch.shape[0]
-                ll = torch.empty(1, dtype=torch.long)
-                ll[0] = l
-                if (sparse_offset_group_batch.is_cuda):
-                    ll = ll.to(torch.device("cuda"))
-                sparse_offset = torch.cat((sparse_offset_group_batch, ll), dim=0)
-                V = E(sparse_index_group_batch,sparse_offset)
-                ly.append(V)
+            if False:
+                pass
+            # if (isinstance(E, TTEmbeddingBag)):
+            #     l = sparse_index_group_batch.shape[0]
+            #     ll = torch.empty(1, dtype=torch.long)
+            #     ll[0] = l
+            #     if (sparse_offset_group_batch.is_cuda):
+            #         ll = ll.to(torch.device("cuda"))
+            #     sparse_offset = torch.cat((sparse_offset_group_batch, ll), dim=0)
+            #     V = E(sparse_index_group_batch,sparse_offset)
+            #     ly.append(V)
             elif self.quantize_emb:
                 s1 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
                 s2 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
@@ -517,6 +529,8 @@ class DLRM_Net(nn.Module):
                 )
 
                 ly.append(V)
+
+
         
         # jhlim
         # ly: embedding vector value
@@ -992,6 +1006,9 @@ def run():
     parser.add_argument("--qr-threshold", type=int, default=200)
     parser.add_argument("--qr-operation", type=str, default="mult")
     parser.add_argument("--qr-collisions", type=int, default=4)
+    parser.add_argument("--tt-flag", action="store_true", default=False)
+    parser.add_argument("--tt-rank", type=int, default=16)
+
     # activations and loss
     parser.add_argument("--activation-function", type=str, default="relu")
     parser.add_argument("--loss-function", type=str, default="mse")  # or bce or wbce
@@ -1859,6 +1876,41 @@ def run():
             )
     # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
+
+    addr_map = {
+        "rank"      : 0,
+        "row"       : 14,
+        "bank"      : 2,
+        "channel"   : 3,
+        "bankgroup" : 2,
+        "column"    : 5
+    }
+
+
+    # print(np.array(EmbTableProfiler.table_profiles).shape)
+    for batch in [8]:
+        for vec_size in [128, 256]:
+            for i in range(2):
+                mapping = True if i%2 == 0 else False
+                write_trace_file(
+                        embedding_profile_savefile='./savedata/Terabyte/profile.pickle',
+                        embedding_profiles=None,
+                        train_data=train_data,
+                        called_inside_DLRM=True,
+                        dataset="Terabyte",
+                        merge_kaggle_and_terabyte=False,
+                        kaggle_duplicate_on_merge=0,
+                        collisions=4,
+                        rank=32,
+                        vec_size=vec_size,
+                        batch_size=batch,
+                        using_vp=False,
+                        using_prefetch=False,
+                        all_prefetch=False,
+                        using_subtable_mapping=mapping,
+                        addr_map=addr_map,
+                        node_level="bankgroup"
+                    )
     # profiling
     if args.enable_profiling:
         time_stamp = str(datetime.datetime.now()).replace(" ", "_")
