@@ -12,7 +12,13 @@ class WeightSharingTranslator():
         embedding_profiles,
         collision,
         tt_rank,
-        vec_size
+        vec_size,
+        use_access_ratio=False,
+        use_hot_ratio=False,
+        total_hot_access=0,
+        total_hot_ratio=0,
+        space_reduct_ratio=0,
+        notRecNMP=True
     ):
 
         self.embedding_profiles = embedding_profiles
@@ -20,10 +26,22 @@ class WeightSharingTranslator():
         self.tt_rank = tt_rank
         self.vec_size = vec_size
 
+        self.use_access_ratio = use_access_ratio
+        self.use_hot_ratio = use_hot_ratio
+        self.total_hot_access = total_hot_access
+        self.total_hot_ratio = total_hot_ratio
+
         self.Q_entries_per_table, self.R_entries_per_table = self.preprocess_QR()
         self.core_info = self.preprocess_TT_Rec()
-
+        self.qr_hot_vec = self.profile_QR_hots()
+        self.tt_hot_vec = self._profile_TT_hots()
+        if space_reduct_ratio > 0 :
+            self.qr_hot_vec_space = self.profile_QR_hots(space_reduct_ratio)
+            self.tt_hot_vec_space = self.profile_TT_hots(notRecNMP, space_reduct_ratio)
+        
     def preprocess_QR(self):
+        print(self.embedding_profiles)
+        print(self.embedding_profiles[i])
         Q_entries_per_table = [int(self.embedding_profiles[i].shape[0]/self.collision) for i in range(len(self.embedding_profiles))]
         R_entries_per_table = [self.collision for i in range(len(self.embedding_profiles))]
         return Q_entries_per_table, R_entries_per_table
@@ -78,6 +96,217 @@ class WeightSharingTranslator():
             access.append((a,b,c))
 
         return access
+
+    def profile_QR_hots(self, space_reduct_ratio=0):
+
+        table_len = len(self.profiles)
+        curr_idx_per_table = [0 for _ in range(table_len)]
+        hot_vec_location = [[] for _ in range(table_len)]
+        hot_vectors = 0
+
+        hot_vector_savefile = './hot_vector_profile_QR_col_%d_hots_%s_%d_ratio_%s_%d.pickle' % (self.collision, self.use_access_ratio, self.total_hots, self.use_hot_ratio, self.total_hot_ratio)
+        if os.path.exists(hot_vector_savefile):
+            with open(hot_vector_savefile, 'rb') as loadfile:
+                hot_vec_location = pickle.load(loadfile)
+                return hot_vec_location
+        else:
+            print("start calculating hot vector")
+
+        total_access = []
+        q_profile = np.array([[] for _ in range(len(self.profiles))])
+        for table_id in range(table_len):
+            total_access.append(np.sum(self.profiles[table_id]))
+            for vec_id in range(len(self.profiles[table_id])):
+                q_profile[table_id].append(np.sum(self.profiles[vec_id*self.collision:(vec_id+1)*self.collision]))
+
+        # for caching table-wise
+        if self.use_access_ratio:
+            for i, prof_per_table in enumerate(q_profile):
+                prof_per_table = prof_per_table / total_access[i] / 2
+                total_hot_access = self.total_hot_access/2 # other half for r table (treat all r subembs as hot)
+                if space_reduct_ratio > 0 :
+                    total_hot_access = space_reduct_ratio/2
+                hot_indices = np.argsort(-prof_per_table)
+                hot_id = 0
+                while not total_hot_access < 0:
+                    curr_hot_id = hot_indices[hot_id]
+                    curr_hot_access = q_profile[curr_hot_id]
+                    hot_vec_loc[i].append(curr_hot_id)
+                    hot_id += 1
+                    total_hot_access -= curr_hot_access
+        # for caching across all vecs
+        elif self.use_hot_ratio:
+            target_hot_vecs = self.hot_vec_ratio * (q_profile.size + self.collision * table_len) - self.collision * table_len # (treat all r subembs as hot)
+            hot_indices_all_table = np.argsort(-q_profile)
+            hot_vecs_per_table = target_hot_vecs // len(q_profile)
+
+            for i, prof_per_table in enumerate(q_profile):
+                hot_indices = np.argsort(-prof_per_table)
+                hot_vec_loc[i].extend(hot_vecs_per_table)
+
+            total_stored_hot_vecs = sum(len(vec_list) for vec_list in hot_vec_loc)
+
+            while total_stored_hot_vecs < target_hot_vecs:
+                for i, prof_per_table in enumerate(q_profile):
+                    if total_stored_hot_vecs >= target_hot_vecs:
+                        break
+                    hot_indices = np.argsort(-prof_per_table)
+                    next_hot_id = len(hot_vec_loc[i])
+                    if next_hot_id < len(prof_per_table):
+                        hot_vec_loc[i].append(hot_indices[next_hot_id])
+                        total_stored_hot_vecs += 1
+
+        for hot_vecs in hot_vec_location:
+            hot_vectors += len(hot_vecs)
+
+        print(f"total vecs {self.total_vector} / total hots {hot_vectors}: ")
+
+        return hot_vec_location
+
+    def profile_TT_hots(self, notRecNMP=True, space_reduct_ratio=0):
+        table_len = len(self.profiles)
+        hot_vec_location = [[[], [], []] for _ in range(table_len)]
+        hot_vector_savefile = './hot_vector_profile_TT_rank_%d_%d_%s_hots_%s_%d_ratio_%s_%d.pickle' % (self.rank, self.dims, self.use_access_ratio, self.total_hots, self.use_hot_ratio, self.total_hot_ratio)
+        if space_reduct_ratio > 0 :
+            hot_vector_savefile = './hot_vector_profile_TT_rank_%d_%d_SPACE' % (self.rank, self.dims)
+
+        if os.path.exists(hot_vector_savefile):
+            with open(hot_vector_savefile, 'rb') as loadfile:
+                hot_vec_location = pickle.load(loadfile)
+                return hot_vec_location
+        else:
+            print("start calculating hot vector")
+
+        tt_profile = [[[], [], []] for _ in range(table_len)]
+        total_access = [0 for _ in range(table_len)]
+
+        core_dims, core_entries_per_table = self.core_info
+        for table_id in range(table_len):
+            core_entries = core_entries_per_table[table_id]
+            tt_profile[table_id].append(np.zeros(core_dims[0]*core_entries))
+            tt_profile[table_id].append(np.zeros(core_dims[1]*core_entries))
+            tt_profile[table_id].append(np.zeros(core_dims[2]*core_entries))
+
+        for table_id in range(table_len):
+            for vec_id in range(len(self.profiles[table_id])):
+                access_per_vec = self.get_TT_Rec_entry(self.vec_size, table_id, vec_id)
+                for access in access_per_vec:
+                    tt_profile[table_id][0][access[0]] += 1
+                    tt_profile[table_id][1][access[1]] += 1
+                    tt_profile[table_id][2][access[2]] += 1
+                    total_access[table_id] += 3
+
+        # for caching table-wise
+        if self.use_access_ratio:
+            for table_id in range(table_len):
+                total_hot_access = self.total_hot_access
+                if space_reduct_ratio > 0 :
+                    total_hot_access = space_reduct_ratio
+
+                if notRecNMP:
+                    combined_profile = tt_profile[table_id][1]
+                    combined_profile = total_access[table_id]/3
+                else:
+                    combined_profile = np.concatenate([
+                        tt_profile[table_id][0], 
+                        tt_profile[table_id][1], 
+                        tt_profile[table_id][2]
+                    ])
+                    combined_profile = combined_profile / total_access[table_id]
+
+                hot_indices = np.argsort(-combined_profile)
+                hot_id = 0
+                while total_hot_access > 0 and hot_id < len(combined_profile):
+                    curr_hot_id = hot_indices[hot_id]
+                    curr_hot_access = combined_profile[curr_hot_id]
+
+                    if notRecNMP:
+                        hot_vec_loc[table_id][1].append(curr_hot_id)
+                    else:
+                        if curr_hot_id < len(tt_profile[table_id][0]):
+                            hot_vec_loc[table_id][0].append(curr_hot_id)
+                        elif curr_hot_id < len(tt_profile[table_id][0]) + len(tt_profile[table_id][1]):
+                            hot_vec_loc[table_id][1].append(curr_hot_id - len(tt_profile[table_id][0]))
+                        else:
+                            hot_vec_loc[table_id][2].append(curr_hot_id - len(tt_profile[table_id][0]) - len(tt_profile[table_id][1]))
+                        
+
+                    hot_id += 1
+                    total_hot_access -= curr_hot_access
+
+        # for caching across all vecs
+        elif self.use_hot_ratio:
+            target_hot_vecs = int(self.hot_vec_ratio * sum(len(table) for table in self.profiles))
+            hot_vecs_per_table = target_hot_vecs // table_len
+            for table_id in range(table_len):
+                combined_profile = np.concatenate([
+                    tt_profile[table_id][0], 
+                    tt_profile[table_id][1], 
+                    tt_profile[table_id][2]
+                ])
+                hot_indices = np.argsort(-combined_profile)
+                for idx in hot_indices[:hot_vecs_per_table]:
+                    if idx < len(tt_profile[table_id][0]):
+                        hot_vec_loc[table_id][0].append(idx)
+                    elif idx < len(tt_profile[table_id][0]) + len(tt_profile[table_id][1]):
+                        hot_vec_loc[table_id][1].append(idx - len(tt_profile[table_id][0]))
+                    else:
+                        hot_vec_loc[table_id][2].append(idx - len(tt_profile[table_id][0]) - len(tt_profile[table_id][1]))
+
+            total_stored_hot_vecs = sum(len(hot_vec_loc[table_id][subtable_id]) for table_id in range(table_len) for subtable_id in range(3))
+            while total_stored_hot_vecs < target_hot_vecs:
+                for table_id in range(table_len):
+                    combined_profile = np.concatenate([
+                        tt_profile[table_id][0], 
+                        tt_profile[table_id][1], 
+                        tt_profile[table_id][2]
+                    ])
+                    hot_indices = np.argsort(-combined_profile)
+                    for idx in hot_indices:
+                        if total_stored_hot_vecs >= target_hot_vecs:
+                            break
+                        stored = False
+                        if idx < len(tt_profile[table_id][0]) and idx not in hot_vec_loc[table_id][0]:
+                            hot_vec_loc[table_id][0].append(idx)
+                            stored=True
+                        elif idx < len(tt_profile[table_id][0]) + len(tt_profile[table_id][1]) and (idx - len(tt_profile[table_id][0])) not in hot_vec_loc[table_id][1]:
+                            hot_vec_loc[table_id][1].append(idx - len(tt_profile[table_id][0]))
+                            stored=True
+                        elif (idx - len(tt_profile[table_id][0]) - len(tt_profile[table_id][1])) not in hot_vec_loc[table_id][2]:
+                            hot_vec_loc[table_id][2].append(idx - len(tt_profile[table_id][0]) - len(tt_profile[table_id][1]))
+                            stored=True
+                        if stored:
+                            total_stored_hot_vecs += 1
+                            break
+
+        total_hots = sum(len(hot_vec_loc[table_id][subtable_id]) for table_id in range(table_len) for subtable_id in range(3))
+        print(f"Total vectors: {self.total_vector}, Total hot vectors across subtables: {total_hots}")
+
+    def is_QR_hot(self, table_id, subemb_id, is_R=False, is_SPACE_reduct=False):
+        if is_R:
+            return True
+        else:
+            if is_SPACE_reduct:
+                return subemb_id in self.qr_hot_vec_space[table_id]
+            else:
+                return subemb_id in self.qr_hot_vec[table_id]
+
+    def is_TT_hot(self, table_id, subemb_id, first_core=False, second_core=False, third_core=False, is_SPACE_reduct=False):
+        if first_core:
+            if is_SPACE_reduct:
+                return subemb_id in self.tt_hot_vec_space[table_id][0][subemb_id]
+            else:
+                return subemb_id in self.tt_hot_vec[table_id][0][subemb_id]
+        elif second_core:
+            if is_SPACE_reduct:
+                return subemb_id in self.tt_hot_vec_space[table_id][1][subemb_id]
+            else:
+                return subemb_id in self.tt_hot_vec[table_id][1][subemb_id]
+        elif third_core:
+            if is_SPACE_reduct:
+                return subemb_id in self.tt_hot_vec_space[table_id][2][subemb_id]
+            else:
+                return subemb_id in self.tt_hot_vec[table_id][2][subemb_id]
 
     def find_number_and_combination_entries(self, N):
         x = 1
@@ -164,7 +393,14 @@ class ProactivePIMTranslation():
         # self.DIMM_max_page_number = int(self.DIMM_Size // self.page_offset)
 
         # preprocess for logical2physical translation
-        self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size)
+        self.ws_translator = None
+        if "RecNMP" in mapper_name:
+            self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size, notRecNMP=False)
+        elif "SPACE" in mapper_name:
+            self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size, use_access_ratio=True, total_hot_access=0.8, space_reduct_ratio=0.1 ,notRecNMP=True)
+        elif "ProactivePIM" in mapper_name:
+            self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size, use_access_ratio=True, total_hot_access=0.952, notRecNMP=True)
+
         self.page_translation_HBM = self.preprocess()
 
     def mapper_name(self):
@@ -358,6 +594,25 @@ class ProactivePIMTranslation():
             if self.using_prefetch:
                 r_command = "RDD" # read every duplicated r addr from every node
 
+            # check for locality
+            if self.mapper_name == "ProactivePIM":
+                # stored inside DIMM
+                if not self.is_QR_hot(table_idx, q_idx, False):
+                    q_physical_addr = -1
+            elif self.mapper_name == "SPACE":
+                # stored inside DIMM
+                if not self.is_QR_hot(table_idx, q_idx, False):
+                    q_physical_addr = -1
+                # reduction locality
+                if self.is_QR_hot(table_idx, q_idx, False, is_SPACE_reduct=True):
+                    q_physical_addr = -1
+            elif self.mapper_name == "RecNMP":
+                # stored inside cache (45% value from cache evaulation result in RecNMP paper)
+                if self.is_QR_hot(table_idx, q_idx, False) and random.randint(1, 100) <= 45:
+                    q_physical_addr = -1
+                elif random.randint(1, 100) <= 45:
+                    r_physical_addr = -1
+
             return (q_physical_addr, r_physical_addr), ("RD", r_command)
         
         elif self.is_TT_Rec:
@@ -365,8 +620,8 @@ class ProactivePIMTranslation():
             total_physical_addr = []
             for a, b, c in access:
                 if self.using_gemv_dist:
-                    for k in range(4):
-                        rank = k*4
+                    for k in range(3):
+                        rank = k*3
                         first_c_logical_addr = np.sum(self.first_size_per_table[:table_idx]) + a * self.tt_rank * 4
                         third_c_logical_addr = np.sum(self.third_size_per_table[:table_idx]) + c * self.tt_rank * 4
                         table_logical_addr = self.table_addr_HBM[table_idx + rank*len(self.embedding_profiles)]
@@ -392,6 +647,27 @@ class ProactivePIMTranslation():
 
                         if self.using_prefetch:
                             first_c_command = "RDD"
+
+                    # check for locality
+                    if self.mapper_name == "ProactivePIM":
+                        # stored inside DIMM
+                        if not self.is_TT_hot(table_idx, b, False, True, False):
+                            second_c_physical_addr = -1
+                    elif self.mapper_name == "SPACE":
+                        # stored inside DIMM
+                        if not self.is_TT_hot(table_idx, b, False, True, False):
+                            second_c_physical_addr = -1
+                        # reduction locality
+                        if self.is_TT_hot(table_idx, b, False, True, False, is_SPACE_reduct=True):
+                            second_c_physical_addr = -1
+                    elif self.mapper_name == "RecNMP":
+                        # stored inside cache (45% value from cache evaulation result in RecNMP paper)
+                        if self.is_TT_hot(table_idx, a, False, True, False) and random.randint(1, 100) <= 45:
+                            first_c_physical_addr = -1
+                        if self.is_TT_hot(table_idx, b, False, True, False) and random.randint(1, 100) <= 45:
+                            second_c_physical_addr = -1
+                        if self.is_TT_hot(table_idx, c, False, True, False) and random.randint(1, 100) <= 45:
+                            thrid_c_physical_addr = -1
 
                         total_physical_addr.append(((first_c_physical_addr, second_c_physical_addr, third_c_physical_addr), (first_c_command, "RD", third_c_command)))
                 else:
@@ -435,30 +711,3 @@ class ProactivePIMTranslation():
             physical_addr = int(ppn*self.page_offset + po_loc)
 
             return physical_addr
-
-# Heterogeneous memory system
-
-# def logical_translation(self, hot_vec_loc, embedding_profiles, vec_size, collisions):        
-#     if self.is_QR:
-#         space_per_table_HBM = [0 + vec_size * (self.reserved_page+len(hot_vec_loc[i])) for i in range(len(hot_vec_loc))]
-#         space_per_table_DIMM = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(embedding_profiles)]
-#     elif self.is_TT_Rec:
-#         space_per_table_HBM = [0 + vec_size * (self.reserved_page+collisions+len(hot_vec_loc[i])) for i in range(len(hot_vec_loc))]
-#         space_per_table_DIMM = [0 + vec_size * (prof_per_table.shape[0]-len(hot_vec_loc[i])) for i, prof_per_table in enumerate(embedding_profiles)]       
-    # table_addr_HBM = []
-    # HBM_accumulation = 0 
-
-    # HBM_accumulation += self.reserved_page
-    # for i in range(len(space_per_table_HBM)):
-    #     table_addr_HBM.append(HBM_accumulation)
-    #     HBM_accumulation += space_per_table_HBM[i]
-    
-    # print("HBM occupied: ", HBM_accumulation/1024/1024/1024, "GB")
-
-    # table_addr_DIMM = []
-    # DIMM_accumulation = 0
-    # for i in range(len(space_per_table_DIMM)):
-    #     table_addr_DIMM.append(DIMM_accumulation)
-    #     DIMM_accumulation += space_per_table_DIMM[i]
-
-    # return table_addr_HBM , table_addr_DIMM
