@@ -1876,41 +1876,9 @@ def run():
             )
     # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
-
-    addr_map = {
-        "rank"      : 0,
-        "row"       : 14,
-        "bank"      : 2,
-        "channel"   : 3,
-        "bankgroup" : 2,
-        "column"    : 5
-    }
-
-
     # print(np.array(EmbTableProfiler.table_profiles).shape)
-    for batch in [8]:
-        for vec_size in [128, 256]:
-            for i in range(2):
-                mapping = True if i%2 == 0 else False
-                write_trace_file(
-                        embedding_profile_savefile='./savedata/Terabyte/profile.pickle',
-                        embedding_profiles=None,
-                        train_data=train_data,
-                        called_inside_DLRM=True,
-                        dataset="Terabyte",
-                        merge_kaggle_and_terabyte=False,
-                        kaggle_duplicate_on_merge=0,
-                        collisions=4,
-                        rank=32,
-                        vec_size=vec_size,
-                        batch_size=batch,
-                        using_vp=False,
-                        using_prefetch=False,
-                        all_prefetch=False,
-                        using_subtable_mapping=mapping,
-                        addr_map=addr_map,
-                        node_level="bankgroup"
-                    )
+    save_profile_result("./savedata", args.data_set)
+
     # profiling
     if args.enable_profiling:
         time_stamp = str(datetime.datetime.now()).replace(" ", "_")

@@ -33,16 +33,16 @@ class WeightSharingTranslator():
 
         self.Q_entries_per_table, self.R_entries_per_table = self.preprocess_QR()
         self.core_info = self.preprocess_TT_Rec()
-        self.qr_hot_vec = self.profile_QR_hots()
-        self.tt_hot_vec = self._profile_TT_hots()
+        self.qr_hot_vec = None
+        if not tt_rank == 0:
+            self.qr_hot_vec = self.profile_QR_hots()
+        # self.tt_hot_vec = self.profile_TT_hots()
         if space_reduct_ratio > 0 :
             self.qr_hot_vec_space = self.profile_QR_hots(space_reduct_ratio)
-            self.tt_hot_vec_space = self.profile_TT_hots(notRecNMP, space_reduct_ratio)
+            # self.tt_hot_vec_space = self.profile_TT_hots(notRecNMP, space_reduct_ratio)
         
     def preprocess_QR(self):
-        print(self.embedding_profiles)
-        print(self.embedding_profiles[i])
-        Q_entries_per_table = [int(self.embedding_profiles[i].shape[0]/self.collision) for i in range(len(self.embedding_profiles))]
+        Q_entries_per_table = [int(len(self.embedding_profiles[i])/self.collision) for i in range(len(self.embedding_profiles))]
         R_entries_per_table = [self.collision for i in range(len(self.embedding_profiles))]
         return Q_entries_per_table, R_entries_per_table
 
@@ -99,29 +99,30 @@ class WeightSharingTranslator():
 
     def profile_QR_hots(self, space_reduct_ratio=0):
 
-        table_len = len(self.profiles)
+        table_len = len(self.embedding_profiles)
         curr_idx_per_table = [0 for _ in range(table_len)]
-        hot_vec_location = [[] for _ in range(table_len)]
+        hot_vec_loc = [[] for _ in range(table_len)]
         hot_vectors = 0
 
-        hot_vector_savefile = './hot_vector_profile_QR_col_%d_hots_%s_%d_ratio_%s_%d.pickle' % (self.collision, self.use_access_ratio, self.total_hots, self.use_hot_ratio, self.total_hot_ratio)
+        hot_vector_savefile = './hot_vector_profile_QR_col_%d_hots_%s_%d_ratio_%s_%d.pickle' % (self.collision, self.use_access_ratio, self.total_hot_access, self.use_hot_ratio, self.total_hot_ratio)
         if os.path.exists(hot_vector_savefile):
             with open(hot_vector_savefile, 'rb') as loadfile:
-                hot_vec_location = pickle.load(loadfile)
-                return hot_vec_location
+                hot_vec_loc = pickle.load(loadfile)
+                return hot_vec_loc
         else:
             print("start calculating hot vector")
 
         total_access = []
-        q_profile = np.array([[] for _ in range(len(self.profiles))])
+        q_profile = [[] for _ in range(len(self.embedding_profiles))]
         for table_id in range(table_len):
-            total_access.append(np.sum(self.profiles[table_id]))
-            for vec_id in range(len(self.profiles[table_id])):
-                q_profile[table_id].append(np.sum(self.profiles[vec_id*self.collision:(vec_id+1)*self.collision]))
+            total_access.append(np.sum(self.embedding_profiles[table_id]))
+            for vec_id in range(len(self.embedding_profiles[table_id])):
+                q_profile[table_id].append(np.sum(self.embedding_profiles[table_id][vec_id*self.collision:(vec_id+1)*self.collision]))
 
         # for caching table-wise
         if self.use_access_ratio:
             for i, prof_per_table in enumerate(q_profile):
+                prof_per_table = np.array(prof_per_table)
                 prof_per_table = prof_per_table / total_access[i] / 2
                 total_hot_access = self.total_hot_access/2 # other half for r table (treat all r subembs as hot)
                 if space_reduct_ratio > 0 :
@@ -130,7 +131,7 @@ class WeightSharingTranslator():
                 hot_id = 0
                 while not total_hot_access < 0:
                     curr_hot_id = hot_indices[hot_id]
-                    curr_hot_access = q_profile[curr_hot_id]
+                    curr_hot_access = prof_per_table[curr_hot_id]
                     hot_vec_loc[i].append(curr_hot_id)
                     hot_id += 1
                     total_hot_access -= curr_hot_access
@@ -156,28 +157,31 @@ class WeightSharingTranslator():
                         hot_vec_loc[i].append(hot_indices[next_hot_id])
                         total_stored_hot_vecs += 1
 
-        for hot_vecs in hot_vec_location:
+        for hot_vecs in hot_vec_loc:
             hot_vectors += len(hot_vecs)
 
-        print(f"total vecs {self.total_vector} / total hots {hot_vectors}: ")
+        # print(f"total vecs {self.total_vector} / total hots {hot_vectors}: ")
 
-        return hot_vec_location
+        with open(hot_vector_savefile, 'wb') as sf:
+            pickle.dump(hot_vec_loc, sf)
+
+        return hot_vec_loc
 
     def profile_TT_hots(self, notRecNMP=True, space_reduct_ratio=0):
-        table_len = len(self.profiles)
-        hot_vec_location = [[[], [], []] for _ in range(table_len)]
-        hot_vector_savefile = './hot_vector_profile_TT_rank_%d_%d_%s_hots_%s_%d_ratio_%s_%d.pickle' % (self.rank, self.dims, self.use_access_ratio, self.total_hots, self.use_hot_ratio, self.total_hot_ratio)
+        table_len = len(self.embedding_profiles)
+        hot_vec_loc = [[[], [], []] for _ in range(table_len)]
+        hot_vector_savefile = './hot_vector_profile_TT_rank_%d_%d_hots_%s_%d_ratio_%s_%d.pickle' % (self.tt_rank, self.vec_size, self.use_access_ratio, self.total_hot_access, self.use_hot_ratio, self.total_hot_ratio)
         if space_reduct_ratio > 0 :
-            hot_vector_savefile = './hot_vector_profile_TT_rank_%d_%d_SPACE' % (self.rank, self.dims)
+            hot_vector_savefile = './hot_vector_profile_TT_rank_%d_%d_SPACE' % (self.tt_rank, self.vec_size)
 
         if os.path.exists(hot_vector_savefile):
             with open(hot_vector_savefile, 'rb') as loadfile:
-                hot_vec_location = pickle.load(loadfile)
-                return hot_vec_location
+                hot_vec_loc = pickle.load(loadfile)
+                return hot_vec_loc
         else:
             print("start calculating hot vector")
 
-        tt_profile = [[[], [], []] for _ in range(table_len)]
+        tt_profile = [[] for _ in range(table_len)]
         total_access = [0 for _ in range(table_len)]
 
         core_dims, core_entries_per_table = self.core_info
@@ -188,13 +192,20 @@ class WeightSharingTranslator():
             tt_profile[table_id].append(np.zeros(core_dims[2]*core_entries))
 
         for table_id in range(table_len):
-            for vec_id in range(len(self.profiles[table_id])):
+            for vec_id in range(len(self.embedding_profiles[table_id])):
+                if vec_id % 100 == 0:
+                    print(vec_id, " / ", len(self.embedding_profiles[table_id]))
                 access_per_vec = self.get_TT_Rec_entry(self.vec_size, table_id, vec_id)
+                counted = 0
                 for access in access_per_vec:
-                    tt_profile[table_id][0][access[0]] += 1
-                    tt_profile[table_id][1][access[1]] += 1
-                    tt_profile[table_id][2][access[2]] += 1
-                    total_access[table_id] += 3
+                    (a, b, c) = access
+                    tt_profile[table_id][0][int(a)] += self.embedding_profiles[table_id][vec_id]
+                    tt_profile[table_id][1][int(b)] += self.embedding_profiles[table_id][vec_id]
+                    tt_profile[table_id][2][int(c)] += self.embedding_profiles[table_id][vec_id]
+                    total_access[table_id] += 3 * elf.embedding_profiles[table_id][vec_id]
+                    counted += 1
+                    if counted == 2:
+                        break
 
         # for caching table-wise
         if self.use_access_ratio:
@@ -236,7 +247,7 @@ class WeightSharingTranslator():
 
         # for caching across all vecs
         elif self.use_hot_ratio:
-            target_hot_vecs = int(self.hot_vec_ratio * sum(len(table) for table in self.profiles))
+            target_hot_vecs = int(self.hot_vec_ratio * sum(len(table) for table in self.embedding_profiles))
             hot_vecs_per_table = target_hot_vecs // table_len
             for table_id in range(table_len):
                 combined_profile = np.concatenate([
@@ -280,7 +291,8 @@ class WeightSharingTranslator():
                             break
 
         total_hots = sum(len(hot_vec_loc[table_id][subtable_id]) for table_id in range(table_len) for subtable_id in range(3))
-        print(f"Total vectors: {self.total_vector}, Total hot vectors across subtables: {total_hots}")
+        # print(f"Total vectors: {self.total_vector}, Total hot vectors across subtables: {total_hots}")
+        return hot_vec_loc
 
     def is_QR_hot(self, table_id, subemb_id, is_R=False, is_SPACE_reduct=False):
         if is_R:
@@ -360,7 +372,7 @@ class ProactivePIMTranslation():
         using_subtable_mapping=False,
         using_gemv_dist=True,
         pim_level="bankgroup",
-        tt_rank=16,
+        tt_rank=0,
         addr_map={},
         mapper_name="ProactivePIM"
         # DIMM_size_gb=16, 
@@ -400,6 +412,8 @@ class ProactivePIMTranslation():
             self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size, use_access_ratio=True, total_hot_access=0.8, space_reduct_ratio=0.1 ,notRecNMP=True)
         elif "ProactivePIM" in mapper_name:
             self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size, use_access_ratio=True, total_hot_access=0.952, notRecNMP=True)
+        elif "ProactivePIM_All_Prefetch" in mapper_name:
+            self.ws_translator = WeightSharingTranslator(embedding_profiles, collisions, tt_rank, vec_size=self.vec_size, use_hot_ratio=True, hot_vec_ratio=0.001, notRecNMP=True)
 
         self.page_translation_HBM = self.preprocess()
 
@@ -480,7 +494,7 @@ class ProactivePIMTranslation():
             for i in range(len(space_per_table_HBM)):
                 table_addr_HBM.append(HBM_accumulation)
                 # print(space_per_table_HBM)
-                HBM_accumulation += space_per_table_HBM[i] + empty_space/len(space_per_table_HBM)
+                HBM_accumulation += space_per_table_HBM[i] #+ empty_space/len(space_per_table_HBM)
         else:
             for i in range(len(space_per_table_HBM)):
                 table_addr_HBM.append(HBM_accumulation)
@@ -648,26 +662,26 @@ class ProactivePIMTranslation():
                         if self.using_prefetch:
                             first_c_command = "RDD"
 
-                    # check for locality
-                    if self.mapper_name == "ProactivePIM":
-                        # stored inside DIMM
-                        if not self.is_TT_hot(table_idx, b, False, True, False):
-                            second_c_physical_addr = -1
-                    elif self.mapper_name == "SPACE":
-                        # stored inside DIMM
-                        if not self.is_TT_hot(table_idx, b, False, True, False):
-                            second_c_physical_addr = -1
-                        # reduction locality
-                        if self.is_TT_hot(table_idx, b, False, True, False, is_SPACE_reduct=True):
-                            second_c_physical_addr = -1
-                    elif self.mapper_name == "RecNMP":
-                        # stored inside cache (45% value from cache evaulation result in RecNMP paper)
-                        if self.is_TT_hot(table_idx, a, False, True, False) and random.randint(1, 100) <= 45:
-                            first_c_physical_addr = -1
-                        if self.is_TT_hot(table_idx, b, False, True, False) and random.randint(1, 100) <= 45:
-                            second_c_physical_addr = -1
-                        if self.is_TT_hot(table_idx, c, False, True, False) and random.randint(1, 100) <= 45:
-                            thrid_c_physical_addr = -1
+                    # # check for locality
+                    # if self.mapper_name == "ProactivePIM":
+                    #     # stored inside DIMM
+                    #     if not self.is_TT_hot(table_idx, b, False, True, False):
+                    #         second_c_physical_addr = -1
+                    # elif self.mapper_name == "SPACE":
+                    #     # stored inside DIMM
+                    #     if not self.is_TT_hot(table_idx, b, False, True, False):
+                    #         second_c_physical_addr = -1
+                    #     # reduction locality
+                    #     if self.is_TT_hot(table_idx, b, False, True, False, is_SPACE_reduct=True):
+                    #         second_c_physical_addr = -1
+                    # elif self.mapper_name == "RecNMP":
+                    #     # stored inside cache (45% value from cache evaulation result in RecNMP paper)
+                    #     if self.is_TT_hot(table_idx, a, False, True, False) and random.randint(1, 100) <= 45:
+                    #         first_c_physical_addr = -1
+                    #     if self.is_TT_hot(table_idx, b, False, True, False) and random.randint(1, 100) <= 45:
+                    #         second_c_physical_addr = -1
+                    #     if self.is_TT_hot(table_idx, c, False, True, False) and random.randint(1, 100) <= 45:
+                    #         thrid_c_physical_addr = -1
 
                         total_physical_addr.append(((first_c_physical_addr, second_c_physical_addr, third_c_physical_addr), (first_c_command, "RD", third_c_command)))
                 else:

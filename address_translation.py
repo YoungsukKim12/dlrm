@@ -6,6 +6,13 @@ import sys
 import os
 from abc import *
 
+# class HotSubembProfiler():
+#     def __init__(self, profiles, translator, collision=8, rank=32, dims=512, use_total_hots=False, use_hot_ratio=False, total_hots=0, hot_ratio=0):
+#         self.profiles = profiles
+#         self.qr_hotvec_loc = self.profile_QR_hots(translator)
+#         self.tt_hotvec_loc = self._profile_TT_hots(translator)
+
+
 class AddressTranslation():
     def __init__(self, embedding_profiles, collisions, translator_name, use_hot_access=True, use_hot_ratio=False, hot_vector_total_access=0.01, hot_vec_ratio=0):
         self.embedding_profiles = embedding_profiles

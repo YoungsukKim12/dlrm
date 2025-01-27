@@ -10,6 +10,7 @@ sys.path.insert(0, '..')
 from proactivePIM_translation import ProactivePIMTranslation
 from multi_hot import Multihot
 from itertools import chain
+import argparse
 
 class EmbTableProfiler:
 
@@ -37,7 +38,7 @@ def save_profile_result(path, dataset):
 def load_profile_result(path, dataset):
     savefile = f'{path}/{dataset}/profile.pickle'
     profiles = None
-    print(savefile)
+    print(f"loading embedding profile from {savefile}")
     if not os.path.exists(savefile):
         print('please run dlrm first!')
         sys.exit()
@@ -104,48 +105,24 @@ def data_move(write_file, device, addr_mapper, addr, cmp_addr, pim_level, burst)
     write_trace_line(write_file, device, addr, "RD", burst)
     transfer_addr, same_node = addr_mapper.map_to_same_node(pim_level, cmp_addr, addr, randomize_row=True)
     if not same_node:
-        # write_trace_line(write_file, device, transfer_addr, "WR", burst)
         write_trace_line(write_file, device, transfer_addr, "DR", burst)
 
-def merge_kaggle_and_terabyte_data(
-        train_data_path, 
-        collision,
-        terabyte_embedding_profiles,
-        kaggle_duplicate_on_merge=1,
-    ):
-
-    kaggle_train_data = load_criteo_train_data(train_data_path, dataset='kaggle')
-    kaggle_embedding_profiles = load_profile_result(path=train_data_path, dataset='kaggle')
-    merged_profile = [*terabyte_embedding_profiles]
-    for i in range(kaggle_duplicate_on_merge):
-        total_access = 0
-        print("kaggle profile len : ", len(kaggle_embedding_profiles))
-        for j, prof_per_table in enumerate(kaggle_embedding_profiles):
-            total_access += np.sum(prof_per_table)
-        for j, prof_per_table in enumerate(kaggle_embedding_profiles):
-            kaggle_embedding_profiles[j] = kaggle_embedding_profiles[j] / total_access / (kaggle_duplicate_on_merge+1)
-
-        merged_profile = [*merged_profile, *kaggle_embedding_profiles]
-    return kaggle_train_data, merged_profile
-
 def write_trace_file(
-        embedding_profile_savefile='./profile.pickle',
-        embedding_profiles=None,
+        emb_prof_path='./savedata',
         train_data=None,
-        called_inside_DLRM=False,
         dataset='kaggle',
         total_trace=10,
+        batch_size=4,
         collisions=4,
         tt_rank=16, 
         vec_size=64,
-        batch_size=4,
+        cpu_baseline=False,
+        cache=None,
         table_prefetch=True,
         all_prefetch=False,
         using_subtable_mapping=True,
         addr_map={},
-        addr_mappers=None,
-        cpu_baseline=False,
-        cache=None,
+        addr_mappers=[],
         pim_level="bankgroup"
     ):
 
@@ -153,30 +130,15 @@ def write_trace_file(
         print("please provide correct address mapping!")
         sys.exit()
 
-    train_data_path = './savedata'
     total_batch = total_trace // batch_size
-
-    print('writing trace file...')
-    if called_inside_DLRM:
-        save_profile_result(train_data_path, dataset)
-        embedding_profiles = EmbTableProfiler.table_profiles
-    else:
-        if embedding_profiles == None:
-            embedding_profiles = load_profile_result(train_data_path, dataset)
+    embedding_profiles = load_profile_result(emb_prof_path, dataset)
 
     print('save & load complete')
-
-    # total_access = 0
-    # for i, prof_per_table in enumerate(embedding_profiles):
-    #     total_access += np.sum(prof_per_table)
-    # for i, prof_per_table in enumerate(embedding_profiles):
-    #     embedding_profiles[i] = embedding_profiles[i] / total_access
 
     default_vec_size = 64
     total_burst = vec_size // default_vec_size
     tt_rec_burst = tt_rank * 4 // default_vec_size
     total_data = len(train_data)
-    using_prefetch = all_prefetch or table_prefetch
 
     multi_hot = Multihot(
                     multi_hot_sizes=[80 for i in range(len(embedding_profiles))],
@@ -187,18 +149,26 @@ def write_trace_file(
                     dataset=dataset
                 )
 
-    print([len(table) for table in embedding_profiles])
-
     for addr_mapper in addr_mappers:
         mapper_name = addr_mapper.mapper_name()
+        using_prefetch = all_prefetch or table_prefetch and "ProactivePIM" in mapper_name
         is_QR = True if "QR" in mapper_name else False
-        is_TT_Rec = True if "TT_Rec" in mapper_name else False
-        writefile = f'./{dataset}_{(mapper_name)}_vec_{vec_size}_cpu_{cpu_baseline}_allprefetch_{all_prefetch}_tableprefetch_{table_prefetch}_mapping_{using_subtable_mapping}.txt'
-        print("writing : ", writefile)
+        is_TT_Rec = True if "TT" in mapper_name else False
+        
+        wfile_head = f'./{mapper_name}_{dataset}_{vec_size}B_'        
+        if cpu_baseline:
+            wfile = wfile_head + f'baseline.txt'
+        elif using_subtable_mapping:
+            if table_prefetch:
+                wfile = wfile_head + f'tw_pf.txt'
+            elif all_prefetch:
+                wfile = wfile_head + f'all_pf.txt'
+            else:
+                wfile = wfile_head + f'submap.txt'
+        print(f"write file name : {wfile}")
 
-        with open(writefile, 'w') as wf:
+        with open(wfile, 'w') as wf:
             total_data_move = 0
-
             for i in range(len(train_data)//batch_size):
                 batch_data = [feat for _, feat, _ in train_data[i*batch_size:(i+1)*batch_size]]
                 batch_data = np.array(batch_data, dtype=np.int64)
@@ -211,30 +181,28 @@ def write_trace_file(
                 if i > total_batch:
                     break
 
-                # prefetch only once
+                # prefetch only once if all_prefetch flag is set
                 if all_prefetch and i == 0:
-                        for table in range(len(embedding_profiles)):
-                            prefetch_addrs = addr_mapper.get_prefetch_physical_address(table)
-                            if is_QR:
-                                write_trace_line(wf, device, prefetch_addrs[i], "PR", total_burst)
-                            elif is_TT_Rec:
-                                write_trace_line(wf, device, prefetch_addrs[i], "PR", tt_rec_burst)
+                    for table in range(len(embedding_profiles)):
+                        prefetch_addrs = addr_mapper.get_prefetch_physical_address(table)
+                        burst = tt_rec_burst if is_TT_Rec else total_burst
+                        write_trace_line(wf, device, prefetch_addrs[i], "PR", burst)
 
                 for table, batch_embs in enumerate(multi_hot_indices):                 
+
+                    # write transfer/prefetch command for each table
                     # inital execution has no result to transfer // batch_size * 4 => four bank groups
-                    transfers = 0 if i == 0 and table == 0 else batch_size * 4 
+                    transfers = 4*batch_size if not (i == 0 and table == 0) else 0 
                     if using_prefetch:
                         prefetch_addrs = addr_mapper.get_prefetch_physical_address(table)
-                        overhead = transfers if transfers > len(prefetch_addrs) else len(prefetch_addrs)
+                        overhead = max(transfers, len(prefetch_addrs))
                         for i in range(overhead):
                             device = "HBM"
                             if i < transfers:
                                 write_trace_line(wf, device, 0, "TR", total_burst)
                             if i < len(prefetch_addrs):
-                                if is_QR:
-                                    write_trace_line(wf, device, prefetch_addrs[i], "PR", total_burst)
-                                elif is_TT_Rec:
-                                    write_trace_line(wf, device, prefetch_addrs[i], "PR", tt_rec_burst)
+                                burst = tt_rec_burst if is_TT_Rec else total_burst
+                                write_trace_line(wf, device, prefetch_addrs[i], "PR", burst)
                     else:
                         for i in range(transfers):
                             write_trace_line(wf, device, 0, "TR", total_burst)
@@ -246,15 +214,17 @@ def write_trace_file(
                                 (q_addr, r_addr), (q_cmd, r_cmd) = addr_mapper.physical_translation(table, emb)
                                 device = "HBM"
                                 if cpu_baseline:
+                                    q_hit = True
+                                    r_hit = True
+                                    
                                     for m in range(total_burst):
-                                        hit = cache.access(q_addr + 64*m, 'q')
-                                        if not hit:
-                                            write_trace_line(wf, device, q_addr, "RD", 1)                                
-
-                                    for m in range(total_burst):
-                                        hit = cache.access(r_addr + 64*m, 'r')
-                                        if not hit:
-                                            write_trace_line(wf, device, r_addr, "RD", 1)                                
+                                        q_hit = q_hit and cache.access(q_addr + 64*m, 'q')                           
+                                        r_hit = r_hit and cache.access(r_addr + 64*m, 'r')
+                                        
+                                    if not q_hit:
+                                        write_trace_line(wf, device, q_addr, "RD", 1)
+                                    if not r_hit:
+                                        write_trace_line(wf, device, r_addr, "RD", 1)                                
                                 else:
                                     write_trace_line(wf, device, q_addr, q_cmd, total_burst)                                
                                     if not using_prefetch:
@@ -272,24 +242,27 @@ def write_trace_file(
                                 device = "HBM"
                                 for (a, b, c), (first_cmd, second_cmd, third_cmd) in total_access:
                                     if cpu_baseline:
+                                        a_hit = True
+                                        b_hit = True
+                                        c_hit = True
                                         for m in range(tt_rec_burst):
-                                            hit = cache.access(a + 64*m, 'q')
-                                            if not hit:
-                                                write_trace_line(wf, device, a, "RD", tt_rec_burst)    
+                                            a_hit = a_hit and cache.access(a + 64*m, 'q')
+                                            c_hit = c_hit and cache.access(c+64*m, 'q')
+                                        for m in range(math.pow(tt_rec_burst, 2)):
+                                            b_hit = b_hit and cache.access(b + 64*m, 'q')
 
-                                        for m in range(tt_rec_burst):
-                                            hit = cache.access(b + 64*m, 'q')
-                                            if not hit:
-                                                write_trace_line(wf, device, b, "RD", tt_rec_burst)    
-
-                                        for m in range(tt_rec_burst):
-                                            hit = hit and cache.access(c + 64*m, 'q')
+                                        if not a_hit:
+                                            write_trace_line(wf, device, a, "RD", tt_rec_burst)    
+                                        if not b_hit:
+                                            write_trace_line(wf, device, b, "RD", math.pow(tt_rec_burst,2)) 
+                                        if not c_hit:
                                             write_trace_line(wf, device, c, "RD", tt_rec_burst)    
-
+                                              
                                     else:
                                         if not using_prefetch:
                                             if using_subtable_mapping:
                                                 write_trace_line(wf, device, a, first_cmd, tt_rec_burst)
+                                                write_trace_line(wf, device, c, third_cmd, tt_rec_burst)
                                             else:
                                                 if first_cmd == "RDWR":
                                                     total_data_move += 1
@@ -297,16 +270,13 @@ def write_trace_file(
                                                 else:
                                                     write_trace_line(wf, device, a, "RD", tt_rec_burst)
 
-                                        write_trace_line(wf, device, b, "RD", tt_rec_burst)
+                                                if third_cmd == "RDWR":
+                                                    total_data_move += 1
+                                                    data_move(wf, device, addr_mapper, c, b, pim_level, tt_rec_burst)
+                                                else:
+                                                    write_trace_line(wf, device, c, "RD", tt_rec_burst)
 
-                                        if using_subtable_mapping:
-                                            write_trace_line(wf, device, c, third_cmd, tt_rec_burst)
-                                        else:
-                                            if third_cmd == "RDWR":
-                                                total_data_move += 1
-                                                data_move(wf, device, addr_mapper, c, b, pim_level, tt_rec_burst)
-                                            else:
-                                                write_trace_line(wf, device, c, "RD", tt_rec_burst)
+                                        write_trace_line(wf, device, b, "RD", math.pow(tt_rec_burst,2))
 
                             else: 
                                 total_burst = vec_size // default_vec_size
@@ -318,115 +288,134 @@ def write_trace_file(
             print("total_data_move : ", total_data_move)
 
 def addrmap_generator(
-        embedding_profiles,
-        vec_size, 
-        collisions, 
-        rank, 
-        using_prefetch, 
-        using_mapping, 
-        addr_map, 
-        pim_level, 
-        mapper_name
+        mapper_name='ProactivePIM',
+        embedding_profiles=None,
+        qr=True,
+        tt_rec=False,
+        vec_size=128, 
+        collisions=4, 
+        rank=16, 
+        using_prefetch=False, 
+        using_mapping=False, 
+        addr_map={}, 
+        pim_level='bankgroup', 
     ):
+    
     addr_mappers = []
+    
+    if qr:
+        addr_mappers.append(
+                ProactivePIMTranslation(
+                    embedding_profiles=embedding_profiles, 
+                    vec_size=vec_size, 
+                    HBM_size_gb=4, 
+                    is_QR=True, 
+                    collisions=collisions, 
+                    using_prefetch=using_prefetch,
+                    using_subtable_mapping=using_subtable_mapping,
+                    addr_map=addr_map,
+                    pim_level=pim_level,
+                    mapper_name=mapper_name+"QR"
+                )
+        )
 
-    # QR
-    addr_mappers.append(
-            ProactivePIMTranslation(
-                embedding_profiles=embedding_profiles, 
-                vec_size=vec_size, 
-                HBM_size_gb=4, 
-                is_QR=True, 
-                collisions=collisions, 
-                using_prefetch=using_prefetch,
-                using_subtable_mapping=using_subtable_mapping,
-                addr_map=addr_map,
-                pim_level=pim_level,
-                mapper_name=mapper_name+"QR"
-            )
-    )
-
-    # TT-Rec
-    addr_mappers.append(
-            ProactivePIMTranslation(
-                embedding_profiles=embedding_profiles, 
-                vec_size=vec_size, 
-                HBM_size_gb=4, 
-                is_TT_Rec=True, 
-                tt_rank=tt_rank, 
-                using_prefetch=using_prefetch,
-                using_subtable_mapping=using_subtable_mapping,
-                using_gemv_dist=True,
-                addr_map=addr_map,
-                pim_level=pim_level,
-                mapper_name=mapper_name+"TT"
-            )
-    )
+    if tt_rec:
+        addr_mappers.append(
+                ProactivePIMTranslation(
+                    embedding_profiles=embedding_profiles, 
+                    vec_size=vec_size, 
+                    HBM_size_gb=4, 
+                    is_TT_Rec=True, 
+                    tt_rank=tt_rank, 
+                    using_prefetch=using_prefetch,
+                    using_subtable_mapping=using_subtable_mapping,
+                    using_gemv_dist=True,
+                    addr_map=addr_map,
+                    pim_level=pim_level,
+                    mapper_name=mapper_name+"TT"
+                )
+        )
 
     return addr_mappers
 
+
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=string, default="kaggle", help="dataset : kaggle or terabyte")
+    parser.add_argument('--qr', type=bool, default=False, help="using qr") 
+    parser.add_argument('--tt', type=bool, default=False, help="using tt")
+    parser.add_argument('--vec_sizes', type=list, default=[128], help="vector size in list format")
+    parser.add_argument('--batch', type=int, default=4, help="batch size")
+    parser.add_argument('--collision', type=int, default=4, help="qr collision") 
+    parser.add_argument('--tt_rank', type=int, default=16, help="tt rank")
+    parser.add_argument('--pim_level', type=string, default='bankgroup', help="pim level : rank, bankgroup, bank")
+    parser.add_argument('--baseline', type=bool, default=False, help="baseline trace")
+    parser.add_argument('--submap', type=bool, default=False, help="subtable mapping trace")
+    parser.add_argument('--allprefetch', type=bool, default=False, help="all prfetch trace")
+    parser.add_argument('--tableprefetch', type=bool, default=False, help="table prefetch trace")
+    parser.parse_args()    
 
     addr_map = {
         "rank"      : 0,
         "row"       : 14,
         "bank"      : 2,
-        "column"    : 5,
+        "channel"   : 3,
         "bankgroup" : 2,
-        "channel"   : 3
+        "column"    : 5
     }
 
-    vec_sizes = [128, 256, 512]
-    batch_sizes = [16]
-    collision = 8
-    tt_rank = 16
-    dataset ='kaggle'
-    pim_level = "bankgroup"
-
-    cpu_baseline = False
+    vec_sizes = args.vec_sizes
+    batch_size = args.batch
+    collision = args.collision
+    tt_rank = args.rank
+    dataset = args.dataset
+    pim_level = args.pim_level
+    cpu_baseline = args.baseline
+    using_subtable_mapping = args.submap
+    table_prefetch = args.tableprefetch
+    all_prefetch = args.allprefetch
+        
     MB_size = 2**20
     CACHE_SIZE = 32*MB_size  # in bytes
     BLOCK_SIZE = 64    # in bytes
     ASSOCIATIVITY = 4
     cache = CacheSimulator.Cache(CACHE_SIZE, BLOCK_SIZE, ASSOCIATIVITY)
 
-    using_subtable_mapping = False
-    table_prefetch = False
-    all_prefetch = False
+    print("Loading embedding profiles for trace generation")
 
     train_data = load_criteo_train_data('./savedata', dataset=dataset)
+    # train_data_path = './savedata'
+    # embedding_profile_savefile = f'./savedata/{dataset}/profile.pickle'
+    # embedding_profiles = load_profile_result(train_data_path, dataset)
+    # embedding_profiles = np.array(embedding_profiles)
 
-    train_data_path = './savedata'
-    embedding_profile_savefile = f'./savedata/{dataset}/profile.pickle'
-    embedding_profiles = load_profile_result(train_data_path, dataset)
-    embedding_profiles = np.array(embedding_profiles)
-
-    for batch in batch_sizes:
-        for vec_size in vec_sizes:
-            using_prefetch = table_prefetch or all_prefetch
-            ProactivePIM_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, using_prefetch, using_subtable_mapping, addr_map, "bankgroup", "ProactivePIM")
-            RecNMP_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, using_prefetch, using_subtable_mapping, addr_map, "rank", "RecNMP")
-            SPACE_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, using_prefetch, using_subtable_mapping, addr_map, "rank", "SPACE")
-            addr_mappers = list(chain(ProactivePIM_maps, RecNMP_maps, SPACE_maps))
-            write_trace_file(
-                    embedding_profile_savefile=embedding_profile_savefile,
-                    embedding_profiles=embedding_profiles,
-                    train_data=train_data,
-                    called_inside_DLRM=False,
-                    dataset=dataset,
-                    merge_kaggle_and_terabyte=False,
-                    kaggle_duplicate_on_merge=0,
-                    total_trace=150,
-                    collisions=collision,
-                    tt_rank=tt_rank,
-                    vec_size=vec_size,
-                    batch_size=batch,
-                    using_vp=False,
-                    table_prefetch=table_prefetch,
-                    all_prefetch=all_prefetch,
-                    using_subtable_mapping=using_subtable_mapping,
-                    addr_map=addr_map,
-                    cpu_baseline=cpu_baseline,
-                    cache=cache,
-                    pim_level=pim_level
-                )
+    for vec_size in vec_sizes:
+        using_prefetch = table_prefetch or all_prefetch
+        print("Generating address mappers...")
+        ProactivePIM_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, using_prefetch, using_subtable_mapping, addr_map, "bankgroup", "ProactivePIM")
+        # ProactivePIM_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, using_prefetch, using_subtable_mapping, addr_map, "bankgroup", "ProactivePIM_All_Prefetch")
+        # RecNMP_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, False, using_subtable_mapping, addr_map, "rank", "RecNMP")
+        # SPACE_maps = addrmap_generator(embedding_profiles, vec_size, collision, tt_rank, False, using_subtable_mapping, addr_map, "rank", "SPACE")
+        # addr_mappers = list(chain(ProactivePIM_maps, RecNMP_maps, SPACE_maps))
+        addr_mappers = ProactivePIM_maps
+        print("Generating traces for DRAMsim3...")
+        
+        write_trace_file(
+                emb_prof_path='./savedata',
+                train_data=train_data,
+                dataset=dataset,
+                total_trace=150,
+                collisions=collision,
+                tt_rank=tt_rank,
+                vec_size=vec_size,
+                batch_size=batch,
+                table_prefetch=table_prefetch,
+                all_prefetch=all_prefetch,
+                using_subtable_mapping=using_subtable_mapping,
+                addr_map=addr_map,
+                addr_mappers=addr_mappers,
+                cpu_baseline=cpu_baseline,
+                cache=cache,
+                pim_level=pim_level
+            )
